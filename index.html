@@ -263,590 +263,506 @@
 <body>
 <div id="root"></div>
 
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script>
+/* ============================================================
+   Budget Planner — single file, zero dependencies, no build.
+   Works by double-clicking index.html (file://) and offline.
+   ============================================================ */
+(function () {
+  "use strict";
 
-<script type="text/babel" data-presets="react">
-const { useState, useEffect, useMemo, useCallback } = React;
-
-const STORAGE_KEY = "budgetPlannerData_v1";
-const FIXED_CATEGORIES = ["Income", "Expenses", "Bills", "Subscriptions", "Debts", "Savings"];
-const OUTFLOW_CATEGORIES = ["Expenses", "Bills", "Subscriptions", "Debts", "Savings"];
-
-const CURRENCIES = [
-  { code: "EUR", symbol: "€" },
-  { code: "USD", symbol: "$" },
-  { code: "GBP", symbol: "£" },
-  { code: "CHF", symbol: "CHF" },
-  { code: "JPY", symbol: "¥" },
-  { code: "CAD", symbol: "CA$" },
-  { code: "AUD", symbol: "AU$" },
-];
-
-function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-function monthKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function monthLabel(key) {
-  const [y, m] = key.split("-").map(Number);
-  const d = new Date(y, m - 1, 1);
-  return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-}
-
-function shiftMonth(key, delta) {
-  const [y, m] = key.split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  return monthKey(d);
-}
-
-function defaultCategories() {
-  return {
-    Income: [{ id: uid(), name: "Salary", planned: 0 }],
-    Expenses: [
-      { id: uid(), name: "Groceries", planned: 0 },
-      { id: uid(), name: "Transport", planned: 0 },
-    ],
-    Bills: [
-      { id: uid(), name: "Rent", planned: 0 },
-      { id: uid(), name: "Utilities", planned: 0 },
-    ],
-    Subscriptions: [{ id: uid(), name: "Streaming", planned: 0 }],
-    Debts: [{ id: uid(), name: "Credit Card", planned: 0 }],
-    Savings: [{ id: uid(), name: "Emergency Fund", planned: 0 }],
-  };
-}
-
-function cloneCategoriesForNewMonth(categories) {
-  const next = {};
-  for (const cat of FIXED_CATEGORIES) {
-    next[cat] = (categories[cat] || []).map((s) => ({ ...s, id: uid() }));
-  }
-  return next;
-}
-
-function loadData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) {
-    console.warn("Failed to load data", e);
-  }
-  const today = monthKey(new Date());
-  return {
-    currency: "EUR",
-    currentMonth: today,
-    months: {
-      [today]: { categories: defaultCategories(), transactions: [] },
-    },
-    sinkingFunds: [],
-  };
-}
-
-function formatMoney(amount, currencyCode) {
-  const cur = CURRENCIES.find((c) => c.code === currencyCode) || CURRENCIES[0];
-  const n = Number(amount) || 0;
-  const sign = n < 0 ? "-" : "";
-  const abs = Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `${sign}${cur.symbol}${abs}`;
-}
-
-function App() {
-  const [data, setData] = useState(loadData);
-  const [installEvent, setInstallEvent] = useState(null);
-  const [showInstallBanner, setShowInstallBanner] = useState(true);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, [data]);
-
-  useEffect(() => {
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js").catch(() => {});
-    }
-    const handler = (e) => {
-      e.preventDefault();
-      setInstallEvent(e);
-    };
-    window.addEventListener("beforeinstallprompt", handler);
-    return () => window.removeEventListener("beforeinstallprompt", handler);
-  }, []);
-
-  const isStandalone =
-    window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-
-  const monthKeyCurrent = data.currentMonth;
-
-  // Ensure current month exists
-  useEffect(() => {
-    if (!data.months[monthKeyCurrent]) {
-      setData((d) => {
-        const monthsSorted = Object.keys(d.months).sort();
-        const lastKey = monthsSorted[monthsSorted.length - 1];
-        const baseCategories = lastKey ? d.months[lastKey].categories : defaultCategories();
-        return {
-          ...d,
-          months: {
-            ...d.months,
-            [monthKeyCurrent]: {
-              categories: cloneCategoriesForNewMonth(baseCategories),
-              transactions: [],
-            },
-          },
-        };
-      });
-    }
-  }, [monthKeyCurrent]);
-
-  const monthData = data.months[monthKeyCurrent] || { categories: defaultCategories(), transactions: [] };
-
-  function setCurrentMonth(key) {
-    setData((d) => ({ ...d, currentMonth: key }));
-  }
-
-  function setCurrency(code) {
-    setData((d) => ({ ...d, currency: code }));
-  }
-
-  function updateCategories(updater) {
-    setData((d) => ({
-      ...d,
-      months: {
-        ...d.months,
-        [monthKeyCurrent]: {
-          ...d.months[monthKeyCurrent],
-          categories: updater(d.months[monthKeyCurrent].categories),
-        },
-      },
-    }));
-  }
-
-  function updateTransactions(updater) {
-    setData((d) => ({
-      ...d,
-      months: {
-        ...d.months,
-        [monthKeyCurrent]: {
-          ...d.months[monthKeyCurrent],
-          transactions: updater(d.months[monthKeyCurrent].transactions),
-        },
-      },
-    }));
-  }
-
-  function addSubcategory(cat) {
-    updateCategories((categories) => ({
-      ...categories,
-      [cat]: [...categories[cat], { id: uid(), name: "New item", planned: 0 }],
-    }));
-  }
-
-  function updateSubcategory(cat, id, patch) {
-    updateCategories((categories) => ({
-      ...categories,
-      [cat]: categories[cat].map((s) => (s.id === id ? { ...s, ...patch } : s)),
-    }));
-  }
-
-  function removeSubcategory(cat, id) {
-    updateCategories((categories) => ({
-      ...categories,
-      [cat]: categories[cat].filter((s) => s.id !== id),
-    }));
-  }
-
-  function addTransaction(tx) {
-    updateTransactions((txs) => [...txs, { ...tx, id: uid() }]);
-  }
-
-  function removeTransaction(id) {
-    updateTransactions((txs) => txs.filter((t) => t.id !== id));
-  }
-
-  function addFund(fund) {
-    setData((d) => ({ ...d, sinkingFunds: [...d.sinkingFunds, { ...fund, id: uid() }] }));
-  }
-
-  function updateFund(id, patch) {
-    setData((d) => ({
-      ...d,
-      sinkingFunds: d.sinkingFunds.map((f) => (f.id === id ? { ...f, ...patch } : f)),
-    }));
-  }
-
-  function removeFund(id) {
-    setData((d) => ({ ...d, sinkingFunds: d.sinkingFunds.filter((f) => f.id !== id) }));
-  }
-
-  // Spent per subcategory
-  const spentBySubcat = useMemo(() => {
-    const map = {};
-    for (const tx of monthData.transactions) {
-      const key = `${tx.category}::${tx.subCategory}`;
-      map[key] = (map[key] || 0) + Number(tx.amount || 0);
-    }
-    return map;
-  }, [monthData.transactions]);
-
-  const totals = useMemo(() => {
-    let plannedIncome = 0;
-    let plannedOutflow = 0;
-    for (const sub of monthData.categories.Income || []) plannedIncome += Number(sub.planned) || 0;
-    for (const cat of OUTFLOW_CATEGORIES) {
-      for (const sub of monthData.categories[cat] || []) plannedOutflow += Number(sub.planned) || 0;
-    }
-    let spent = 0;
-    let actualIncome = 0;
-    for (const tx of monthData.transactions) {
-      if (tx.category === "Income") actualIncome += Number(tx.amount) || 0;
-      else spent += Number(tx.amount) || 0;
-    }
-    const leftToBudget = plannedIncome - plannedOutflow;
-    const leftToSpend = plannedOutflow - spent;
-    const projectedBalance = plannedIncome - spent;
-    return { plannedIncome, plannedOutflow, leftToBudget, spent, leftToSpend, projectedBalance, actualIncome };
-  }, [monthData]);
-
-  const currency = data.currency;
-
-  return (
-    <React.Fragment>
-      <header className="top">
-        <h1>💶 Budget Planner</h1>
-        <div className="month-switcher">
-          <button className="nav" onClick={() => setCurrentMonth(shiftMonth(monthKeyCurrent, -1))}>‹</button>
-          <div className="month-label">{monthLabel(monthKeyCurrent)}</div>
-          <button className="nav" onClick={() => setCurrentMonth(shiftMonth(monthKeyCurrent, 1))}>›</button>
-        </div>
-        <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
-          {CURRENCIES.map((c) => (
-            <option key={c.code} value={c.code}>{c.code} ({c.symbol})</option>
-          ))}
-        </select>
-      </header>
-
-      {!isStandalone && showInstallBanner && (
-        <div className="install-banner">
-          {isIOS ? (
-            <span>Install on your iPhone/iPad: tap Share → "Add to Home Screen".</span>
-          ) : installEvent ? (
-            <span>Install this app for quick access from your dock or home screen.</span>
-          ) : (
-            <span>Tip: use your browser's "Install app" / "Add to Dock" option for offline access.</span>
-          )}
-          <div style={{ display: "flex", gap: 8 }}>
-            {installEvent && (
-              <button
-                onClick={async () => {
-                  installEvent.prompt();
-                  await installEvent.userChoice;
-                  setInstallEvent(null);
-                }}
-              >
-                Install
-              </button>
-            )}
-            <button onClick={() => setShowInstallBanner(false)} style={{ background: "transparent", color: "var(--text-dim)", border: "1px solid var(--border)" }}>
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
-
-      <SummaryBar totals={totals} currency={currency} />
-
-      <CategoriesBlock
-        categories={monthData.categories}
-        spentBySubcat={spentBySubcat}
-        currency={currency}
-        onAddSub={addSubcategory}
-        onUpdateSub={updateSubcategory}
-        onRemoveSub={removeSubcategory}
-      />
-
-      <TransactionsBlock
-        categories={monthData.categories}
-        transactions={monthData.transactions}
-        currency={currency}
-        onAdd={addTransaction}
-        onRemove={removeTransaction}
-      />
-
-      <SinkingFundsBlock funds={data.sinkingFunds} currency={currency} onAdd={addFund} onUpdate={updateFund} onRemove={removeFund} />
-
-      <footer className="app-footer">All data is stored locally on this device. No account, no servers.</footer>
-    </React.Fragment>
-  );
-}
-
-function SummaryBar({ totals, currency }) {
-  const cards = [
-    { label: "Planned Income", value: totals.plannedIncome, cls: "" },
-    { label: "Planned Outflow", value: totals.plannedOutflow, cls: "" },
-    { label: "Left to Budget", value: totals.leftToBudget, cls: totals.leftToBudget < 0 ? "neg" : "pos" },
-    { label: "Spent", value: totals.spent, cls: "" },
-    { label: "Left to Spend", value: totals.leftToSpend, cls: totals.leftToSpend < 0 ? "neg" : "pos" },
-    { label: "Projected Balance", value: totals.projectedBalance, cls: totals.projectedBalance < 0 ? "neg" : "pos" },
+  var STORAGE_KEY = "budgetPlannerData_v1";
+  var FIXED_CATEGORIES = ["Income", "Expenses", "Bills", "Subscriptions", "Debts", "Savings"];
+  var OUTFLOW_CATEGORIES = ["Expenses", "Bills", "Subscriptions", "Debts", "Savings"];
+  var CURRENCIES = [
+    { code: "EUR", symbol: "€" },
+    { code: "USD", symbol: "$" },
+    { code: "GBP", symbol: "£" },
+    { code: "CHF", symbol: "CHF" },
+    { code: "JPY", symbol: "¥" },
+    { code: "CAD", symbol: "CA$" },
+    { code: "AUD", symbol: "AU$" }
   ];
-  return (
-    <div className="summary-grid">
-      {cards.map((c) => (
-        <div className="summary-card" key={c.label}>
-          <div className="label">{c.label}</div>
-          <div className={`value ${c.cls}`}>{formatMoney(c.value, currency)}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
-function CategoriesBlock({ categories, spentBySubcat, currency, onAddSub, onUpdateSub, onRemoveSub }) {
-  return (
-    <section className="block">
-      <h2>Envelopes</h2>
-      <div className="categories-grid">
-        {FIXED_CATEGORIES.map((cat) => {
-          const subs = categories[cat] || [];
-          const plannedTotal = subs.reduce((s, x) => s + (Number(x.planned) || 0), 0);
-          const spentTotal = subs.reduce((s, x) => s + (spentBySubcat[`${cat}::${x.name}`] || 0), 0);
-          return (
-            <div className="category-card" key={cat}>
-              <h3>{cat}</h3>
-              <div className="cat-totals">
-                Planned {formatMoney(plannedTotal, currency)} · {cat === "Income" ? "Received" : "Spent"} {formatMoney(spentTotal, currency)}
-              </div>
-              {subs.map((sub) => {
-                const spent = spentBySubcat[`${cat}::${sub.name}`] || 0;
-                return (
-                  <div className="subcat-row" key={sub.id}>
-                    <input
-                      className="name"
-                      value={sub.name}
-                      onChange={(e) => onUpdateSub(cat, sub.id, { name: e.target.value })}
-                    />
-                    <input
-                      className="planned"
-                      type="number"
-                      step="0.01"
-                      value={sub.planned}
-                      onChange={(e) => onUpdateSub(cat, sub.id, { planned: e.target.value === "" ? "" : Number(e.target.value) })}
-                    />
-                    <span className="spent-tag">{formatMoney(spent, currency)}</span>
-                    <button className="icon-btn" onClick={() => onRemoveSub(cat, sub.id)} title="Remove">✕</button>
-                  </div>
-                );
-              })}
-              <button className="add-link" onClick={() => onAddSub(cat)}>+ Add sub-category</button>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
+  /* ---------- helpers ---------- */
+  function uid() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+  function monthKey(date) {
+    return date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0");
+  }
+  function monthLabel(key) {
+    var p = key.split("-").map(Number);
+    return new Date(p[0], p[1] - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  }
+  function shiftMonth(key, delta) {
+    var p = key.split("-").map(Number);
+    return monthKey(new Date(p[0], p[1] - 1 + delta, 1));
+  }
+  function addMonths(date, months) {
+    var d = new Date(date);
+    d.setMonth(d.getMonth() + months);
+    return d;
+  }
+  function num(v) {
+    var n = Number(v);
+    return isNaN(n) ? 0 : n;
+  }
+  function formatMoney(amount, currencyCode) {
+    var cur = CURRENCIES.filter(function (c) { return c.code === currencyCode; })[0] || CURRENCIES[0];
+    var n = num(amount);
+    var sign = n < 0 ? "-" : "";
+    var abs = Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return sign + cur.symbol + abs;
+  }
 
-function flattenSubcats(categories, cat) {
-  return (categories[cat] || []).map((s) => s.name);
-}
-
-function TransactionsBlock({ categories, transactions, currency, onAdd, onRemove }) {
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const [date, setDate] = useState(todayStr);
-  const [category, setCategory] = useState(FIXED_CATEGORIES[0]);
-  const [subCategory, setSubCategory] = useState("");
-  const [amount, setAmount] = useState("");
-  const [description, setDescription] = useState("");
-
-  const subOptions = flattenSubcats(categories, category);
-
-  useEffect(() => {
-    if (!subOptions.includes(subCategory)) {
-      setSubCategory(subOptions[0] || "");
+  /* el(tag, attrs, ...children) tiny DOM builder */
+  function el(tag, attrs) {
+    var e = document.createElement(tag);
+    attrs = attrs || {};
+    for (var k in attrs) {
+      if (!attrs.hasOwnProperty(k)) continue;
+      var v = attrs[k];
+      if (v == null) continue;
+      if (k === "class") e.className = v;
+      else if (k === "value") e.value = v;
+      else if (k === "checked") e.checked = !!v;
+      else if (k === "style" && typeof v === "object") { for (var s in v) e.style[s] = v[s]; }
+      else if (k === "dataset") { for (var d in v) e.dataset[d] = v[d]; }
+      else if (k.slice(0, 2) === "on" && typeof v === "function") e.addEventListener(k.slice(2).toLowerCase(), v);
+      else e.setAttribute(k, v);
     }
-  }, [category, categories]);
-
-  function submit(e) {
-    e.preventDefault();
-    if (!subCategory || !amount) return;
-    onAdd({ date, category, subCategory, amount: Number(amount), description });
-    setAmount("");
-    setDescription("");
+    for (var i = 2; i < arguments.length; i++) {
+      var kid = arguments[i];
+      append(e, kid);
+    }
+    return e;
+  }
+  function append(parent, kid) {
+    if (kid == null || kid === false) return;
+    if (Array.isArray(kid)) { kid.forEach(function (c) { append(parent, c); }); return; }
+    parent.appendChild(typeof kid === "object" ? kid : document.createTextNode(String(kid)));
   }
 
-  const sorted = [...transactions].sort((a, b) => (a.date < b.date ? 1 : -1));
-
-  return (
-    <section className="block">
-      <h2>Transactions</h2>
-      <form className="tx-form" onSubmit={submit}>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-        <select value={category} onChange={(e) => setCategory(e.target.value)}>
-          {FIXED_CATEGORIES.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-        <select value={subCategory} onChange={(e) => setSubCategory(e.target.value)}>
-          {subOptions.length === 0 && <option value="">(no sub-categories)</option>}
-          {subOptions.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
-        <input
-          type="number"
-          step="0.01"
-          placeholder="Amount"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          required
-        />
-        <input
-          type="text"
-          placeholder="Description"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-        <button className="btn-primary" type="submit">Add</button>
-      </form>
-
-      <div className="table-wrap">
-        {sorted.length === 0 ? (
-          <div className="empty-note">No transactions this month yet.</div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Category</th>
-                <th>Sub-category</th>
-                <th>Description</th>
-                <th style={{ textAlign: "right" }}>Amount</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((tx) => (
-                <tr key={tx.id}>
-                  <td>{tx.date}</td>
-                  <td>{tx.category}</td>
-                  <td>{tx.subCategory}</td>
-                  <td>{tx.description}</td>
-                  <td className="tx-amount">{formatMoney(tx.amount, currency)}</td>
-                  <td>
-                    <button className="icon-btn" onClick={() => onRemove(tx.id)} title="Delete">✕</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function addMonths(date, months) {
-  const d = new Date(date);
-  d.setMonth(d.getMonth() + months);
-  return d;
-}
-
-function SinkingFundsBlock({ funds, currency, onAdd, onUpdate, onRemove }) {
-  const [name, setName] = useState("");
-  const [target, setTarget] = useState("");
-  const [contribution, setContribution] = useState("");
-
-  function submit(e) {
-    e.preventDefault();
-    if (!name || !target) return;
-    onAdd({ name, target: Number(target), monthlyContribution: Number(contribution) || 0, saved: 0 });
-    setName("");
-    setTarget("");
-    setContribution("");
+  /* ---------- data ---------- */
+  function defaultCategories() {
+    return {
+      Income: [{ id: uid(), name: "Salary", planned: 0 }],
+      Expenses: [
+        { id: uid(), name: "Groceries", planned: 0 },
+        { id: uid(), name: "Transport", planned: 0 }
+      ],
+      Bills: [
+        { id: uid(), name: "Rent", planned: 0 },
+        { id: uid(), name: "Utilities", planned: 0 }
+      ],
+      Subscriptions: [{ id: uid(), name: "Streaming", planned: 0 }],
+      Debts: [{ id: uid(), name: "Credit Card", planned: 0 }],
+      Savings: [{ id: uid(), name: "Emergency Fund", planned: 0 }]
+    };
+  }
+  function cloneCategoriesForNewMonth(categories) {
+    var next = {};
+    FIXED_CATEGORIES.forEach(function (cat) {
+      next[cat] = (categories[cat] || []).map(function (s) {
+        return { id: uid(), name: s.name, planned: s.planned };
+      });
+    });
+    return next;
+  }
+  function loadData() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) { /* ignore */ }
+    var today = monthKey(new Date());
+    var d = { currency: "EUR", currentMonth: today, months: {}, sinkingFunds: [] };
+    d.months[today] = { categories: defaultCategories(), transactions: [] };
+    return d;
+  }
+  function save() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
   }
 
-  return (
-    <section className="block">
-      <h2>Sinking Funds</h2>
-      <form className="fund-form" onSubmit={submit}>
-        <input type="text" placeholder="Goal name" value={name} onChange={(e) => setName(e.target.value)} required />
-        <input type="number" step="0.01" placeholder="Target" value={target} onChange={(e) => setTarget(e.target.value)} required />
-        <input type="number" step="0.01" placeholder="Monthly €" value={contribution} onChange={(e) => setContribution(e.target.value)} />
-        <button className="btn-primary" type="submit">Add Goal</button>
-      </form>
+  var state = loadData();
 
-      {funds.length === 0 ? (
-        <div className="empty-note">No sinking funds yet. Add a savings goal above.</div>
-      ) : (
-        <div className="funds-grid">
-          {funds.map((f) => {
-            const pct = f.target > 0 ? Math.min(100, (f.saved / f.target) * 100) : 0;
-            const remaining = Math.max(0, f.target - f.saved);
-            const monthsLeft = f.monthlyContribution > 0 ? Math.ceil(remaining / f.monthlyContribution) : null;
-            const completion =
-              monthsLeft !== null
-                ? addMonths(new Date(), monthsLeft).toLocaleDateString(undefined, { month: "short", year: "numeric" })
-                : "—";
-            return (
-              <div className="fund-card" key={f.id}>
-                <h3>
-                  <input
-                    value={f.name}
-                    onChange={(e) => onUpdate(f.id, { name: e.target.value })}
-                    style={{ background: "transparent", border: "none", color: "inherit", fontSize: 15, fontWeight: 600, padding: 0 }}
-                  />
-                  <button className="icon-btn" onClick={() => onRemove(f.id)} title="Delete">✕</button>
-                </h3>
-                <div className="fund-meta">
-                  <span>Target: {formatMoney(f.target, currency)}</span>
-                  <span>Saved: {formatMoney(f.saved, currency)}</span>
-                </div>
-                <div className="progress-track">
-                  <div className="progress-fill" style={{ width: `${pct}%` }} />
-                </div>
-                <div className="fund-meta">
-                  <span>{pct.toFixed(0)}% funded</span>
-                  <span>{monthsLeft !== null ? `${monthsLeft} months left` : "Set a monthly contribution"}</span>
-                  <span>Est. completion: {completion}</span>
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
-                  <label style={{ fontSize: 12, color: "var(--text-dim)" }}>Monthly</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={f.monthlyContribution}
-                    onChange={(e) => onUpdate(f.id, { monthlyContribution: Number(e.target.value) || 0 })}
-                    style={{ width: 80 }}
-                  />
-                  <label style={{ fontSize: 12, color: "var(--text-dim)" }}>Saved</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={f.saved}
-                    onChange={(e) => onUpdate(f.id, { saved: Number(e.target.value) || 0 })}
-                    style={{ width: 90 }}
-                  />
-                </div>
-                <div className="fund-actions">
-                  <button onClick={() => onUpdate(f.id, { saved: f.saved + (Number(f.monthlyContribution) || 0) })}>
-                    + Log monthly contribution
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
+  function ensureMonth(key) {
+    if (!state.months[key]) {
+      var keys = Object.keys(state.months).sort();
+      var last = keys[keys.length - 1];
+      var base = last ? state.months[last].categories : defaultCategories();
+      state.months[key] = { categories: cloneCategoriesForNewMonth(base), transactions: [] };
+      save();
+    }
+    return state.months[key];
+  }
+  function currentMonthData() { return ensureMonth(state.currentMonth); }
 
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(<App />);
+  function spentMap(transactions) {
+    var m = {};
+    transactions.forEach(function (tx) {
+      var key = tx.category + "::" + tx.subCategory;
+      m[key] = (m[key] || 0) + num(tx.amount);
+    });
+    return m;
+  }
+  function computeTotals(md) {
+    var plannedIncome = 0, plannedOutflow = 0, spent = 0, actualIncome = 0;
+    (md.categories.Income || []).forEach(function (s) { plannedIncome += num(s.planned); });
+    OUTFLOW_CATEGORIES.forEach(function (cat) {
+      (md.categories[cat] || []).forEach(function (s) { plannedOutflow += num(s.planned); });
+    });
+    md.transactions.forEach(function (tx) {
+      if (tx.category === "Income") actualIncome += num(tx.amount);
+      else spent += num(tx.amount);
+    });
+    return {
+      plannedIncome: plannedIncome,
+      plannedOutflow: plannedOutflow,
+      leftToBudget: plannedIncome - plannedOutflow,
+      spent: spent,
+      leftToSpend: plannedOutflow - spent,
+      projectedBalance: plannedIncome - spent,
+      actualIncome: actualIncome
+    };
+  }
+
+  /* ---------- live (non-destructive) recompute ---------- */
+  function updateComputed() {
+    var md = currentMonthData();
+    var sm = spentMap(md.transactions);
+    var t = computeTotals(md);
+    var cur = state.currency;
+
+    var sumDefs = {
+      plannedIncome: { v: t.plannedIncome, cls: "" },
+      plannedOutflow: { v: t.plannedOutflow, cls: "" },
+      leftToBudget: { v: t.leftToBudget, cls: t.leftToBudget < 0 ? "neg" : "pos" },
+      spent: { v: t.spent, cls: "" },
+      leftToSpend: { v: t.leftToSpend, cls: t.leftToSpend < 0 ? "neg" : "pos" },
+      projectedBalance: { v: t.projectedBalance, cls: t.projectedBalance < 0 ? "neg" : "pos" }
+    };
+    Object.keys(sumDefs).forEach(function (id) {
+      var node = document.querySelector('[data-sum="' + id + '"]');
+      if (node) { node.textContent = formatMoney(sumDefs[id].v, cur); node.className = "value " + sumDefs[id].cls; }
+    });
+
+    // category totals
+    var catNodes = document.querySelectorAll("[data-cat-totals]");
+    Array.prototype.forEach.call(catNodes, function (node) {
+      var cat = node.getAttribute("data-cat-totals");
+      var subs = md.categories[cat] || [];
+      var planned = 0, spent = 0;
+      subs.forEach(function (s) {
+        planned += num(s.planned);
+        spent += sm[cat + "::" + s.name] || 0;
+      });
+      node.textContent = "Planned " + formatMoney(planned, cur) + " · " +
+        (cat === "Income" ? "Received " : "Spent ") + formatMoney(spent, cur);
+    });
+
+    // per-subcat spent tags
+    var tagNodes = document.querySelectorAll("[data-spent-sub]");
+    Array.prototype.forEach.call(tagNodes, function (node) {
+      var cat = node.getAttribute("data-spent-cat");
+      var id = node.getAttribute("data-spent-sub");
+      var subs = md.categories[cat] || [];
+      var sub = subs.filter(function (s) { return s.id === id; })[0];
+      if (sub) node.textContent = formatMoney(sm[cat + "::" + sub.name] || 0, cur);
+    });
+
+    // funds
+    var fundNodes = document.querySelectorAll("[data-fund-id]");
+    Array.prototype.forEach.call(fundNodes, function (card) {
+      var id = card.getAttribute("data-fund-id");
+      var f = state.sinkingFunds.filter(function (x) { return x.id === id; })[0];
+      if (!f) return;
+      var pct = f.target > 0 ? Math.min(100, (f.saved / f.target) * 100) : 0;
+      var remaining = Math.max(0, f.target - f.saved);
+      var monthsLeft = f.monthlyContribution > 0 ? Math.ceil(remaining / f.monthlyContribution) : null;
+      var completion = monthsLeft !== null
+        ? addMonths(new Date(), monthsLeft).toLocaleDateString(undefined, { month: "short", year: "numeric" })
+        : "—";
+      var fill = card.querySelector(".progress-fill"); if (fill) fill.style.width = pct + "%";
+      var setTxt = function (sel, txt) { var n = card.querySelector(sel); if (n) n.textContent = txt; };
+      setTxt(".f-target", "Target: " + formatMoney(f.target, cur));
+      setTxt(".f-saved", "Saved: " + formatMoney(f.saved, cur));
+      setTxt(".f-pct", pct.toFixed(0) + "% funded");
+      setTxt(".f-monthsleft", monthsLeft !== null ? monthsLeft + " months left" : "Set a monthly contribution");
+      setTxt(".f-completion", "Est. completion: " + completion);
+    });
+  }
+
+  /* ---------- environment ---------- */
+  function isStandalone() {
+    return (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+      window.navigator.standalone === true;
+  }
+  var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  var installEvent = null;
+  var installDismissed = false;
+
+  /* ---------- sections ---------- */
+  function renderHeader() {
+    return el("header", { class: "top" },
+      el("h1", {}, "💶 Budget Planner"),
+      el("div", { class: "month-switcher" },
+        el("button", { class: "nav", onclick: function () { state.currentMonth = shiftMonth(state.currentMonth, -1); save(); fullRender(); } }, "‹"),
+        el("div", { class: "month-label" }, monthLabel(state.currentMonth)),
+        el("button", { class: "nav", onclick: function () { state.currentMonth = shiftMonth(state.currentMonth, 1); save(); fullRender(); } }, "›")
+      ),
+      el("select", { onchange: function (e) { state.currency = e.target.value; save(); fullRender(); } },
+        CURRENCIES.map(function (c) {
+          return el("option", { value: c.code, selected: c.code === state.currency ? "selected" : null }, c.code + " (" + c.symbol + ")");
+        })
+      )
+    );
+  }
+
+  function renderInstallBanner() {
+    if (isStandalone() || installDismissed) return null;
+    var msg;
+    if (isIOS) msg = el("span", {}, 'Install on your iPhone/iPad: tap Share → "Add to Home Screen".');
+    else if (installEvent) msg = el("span", {}, "Install this app for quick access from your dock or home screen.");
+    else msg = el("span", {}, 'Tip: use your browser\'s "Install app" / "Add to Dock" option for offline access.');
+
+    var buttons = [];
+    if (installEvent) {
+      buttons.push(el("button", { onclick: function () {
+        installEvent.prompt();
+        installEvent.userChoice.finally && installEvent.userChoice.finally(function () { installEvent = null; fullRender(); });
+        installEvent = null;
+      } }, "Install"));
+    }
+    buttons.push(el("button", {
+      style: { background: "transparent", color: "var(--text-dim)", border: "1px solid var(--border)" },
+      onclick: function () { installDismissed = true; fullRender(); }
+    }, "Dismiss"));
+
+    return el("div", { class: "install-banner" }, msg, el("div", { style: { display: "flex", gap: "8px" } }, buttons));
+  }
+
+  function renderSummary() {
+    var defs = [
+      { id: "plannedIncome", label: "Planned Income" },
+      { id: "plannedOutflow", label: "Planned Outflow" },
+      { id: "leftToBudget", label: "Left to Budget" },
+      { id: "spent", label: "Spent" },
+      { id: "leftToSpend", label: "Left to Spend" },
+      { id: "projectedBalance", label: "Projected Balance" }
+    ];
+    return el("div", { class: "summary-grid" },
+      defs.map(function (d) {
+        return el("div", { class: "summary-card" },
+          el("div", { class: "label" }, d.label),
+          el("div", { class: "value", dataset: { sum: d.id } }, "—")
+        );
+      })
+    );
+  }
+
+  function renderCategories() {
+    var md = currentMonthData();
+    return el("section", { class: "block" },
+      el("h2", {}, "Envelopes"),
+      el("div", { class: "categories-grid" },
+        FIXED_CATEGORIES.map(function (cat) {
+          var subs = md.categories[cat] || [];
+          return el("div", { class: "category-card" },
+            el("h3", {}, cat),
+            el("div", { class: "cat-totals", dataset: { catTotals: cat } }, "—"),
+            subs.map(function (sub) {
+              return el("div", { class: "subcat-row" },
+                el("input", {
+                  class: "name", value: sub.name,
+                  oninput: function (e) { sub.name = e.target.value; save(); updateComputed(); }
+                }),
+                el("input", {
+                  class: "planned", type: "number", step: "0.01", value: sub.planned,
+                  oninput: function (e) { sub.planned = e.target.value === "" ? 0 : num(e.target.value); save(); updateComputed(); }
+                }),
+                el("span", { class: "spent-tag", dataset: { spentSub: sub.id, spentCat: cat } }, "—"),
+                el("button", { class: "icon-btn", title: "Remove", onclick: function () {
+                  md.categories[cat] = subs.filter(function (s) { return s.id !== sub.id; });
+                  save(); fullRender();
+                } }, "✕")
+              );
+            }),
+            el("button", { class: "add-link", onclick: function () {
+              md.categories[cat].push({ id: uid(), name: "New item", planned: 0 });
+              save(); fullRender();
+            } }, "+ Add sub-category")
+          );
+        })
+      )
+    );
+  }
+
+  function renderTransactions() {
+    var md = currentMonthData();
+    var todayStr = new Date().toISOString().slice(0, 10);
+
+    var dateInput = el("input", { type: "date", value: todayStr, required: "required" });
+    var catSelect = el("select", {});
+    FIXED_CATEGORIES.forEach(function (c) { catSelect.appendChild(el("option", { value: c }, c)); });
+    var subSelect = el("select", {});
+
+    function fillSubs() {
+      subSelect.innerHTML = "";
+      var subs = md.categories[catSelect.value] || [];
+      if (subs.length === 0) subSelect.appendChild(el("option", { value: "" }, "(no sub-categories)"));
+      subs.forEach(function (s) { subSelect.appendChild(el("option", { value: s.name }, s.name)); });
+    }
+    catSelect.addEventListener("change", fillSubs);
+    fillSubs();
+
+    var amountInput = el("input", { type: "number", step: "0.01", placeholder: "Amount", required: "required" });
+    var descInput = el("input", { type: "text", placeholder: "Description" });
+
+    var form = el("form", { class: "tx-form", onsubmit: function (e) {
+      e.preventDefault();
+      if (!subSelect.value || amountInput.value === "") return;
+      md.transactions.push({
+        id: uid(), date: dateInput.value, category: catSelect.value,
+        subCategory: subSelect.value, amount: num(amountInput.value), description: descInput.value
+      });
+      save(); fullRender();
+    } },
+      dateInput, catSelect, subSelect, amountInput, descInput,
+      el("button", { class: "btn-primary", type: "submit" }, "Add")
+    );
+
+    var sorted = md.transactions.slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+    var tableArea;
+    if (sorted.length === 0) {
+      tableArea = el("div", { class: "empty-note" }, "No transactions this month yet.");
+    } else {
+      tableArea = el("table", {},
+        el("thead", {}, el("tr", {},
+          el("th", {}, "Date"), el("th", {}, "Category"), el("th", {}, "Sub-category"),
+          el("th", {}, "Description"), el("th", { style: { textAlign: "right" } }, "Amount"), el("th", {})
+        )),
+        el("tbody", {}, sorted.map(function (tx) {
+          return el("tr", {},
+            el("td", {}, tx.date), el("td", {}, tx.category), el("td", {}, tx.subCategory),
+            el("td", {}, tx.description), el("td", { class: "tx-amount" }, formatMoney(tx.amount, state.currency)),
+            el("td", {}, el("button", { class: "icon-btn", title: "Delete", onclick: function () {
+              md.transactions = md.transactions.filter(function (t) { return t.id !== tx.id; });
+              save(); fullRender();
+            } }, "✕"))
+          );
+        }))
+      );
+    }
+
+    return el("section", { class: "block" },
+      el("h2", {}, "Transactions"),
+      form,
+      el("div", { class: "table-wrap" }, tableArea)
+    );
+  }
+
+  function renderFunds() {
+    var nameInput = el("input", { type: "text", placeholder: "Goal name", required: "required" });
+    var targetInput = el("input", { type: "number", step: "0.01", placeholder: "Target", required: "required" });
+    var contribInput = el("input", { type: "number", step: "0.01", placeholder: "Monthly " + (CURRENCIES.filter(function (c) { return c.code === state.currency; })[0] || CURRENCIES[0]).symbol });
+
+    var form = el("form", { class: "fund-form", onsubmit: function (e) {
+      e.preventDefault();
+      if (!nameInput.value || targetInput.value === "") return;
+      state.sinkingFunds.push({
+        id: uid(), name: nameInput.value, target: num(targetInput.value),
+        monthlyContribution: num(contribInput.value), saved: 0
+      });
+      save(); fullRender();
+    } },
+      nameInput, targetInput, contribInput,
+      el("button", { class: "btn-primary", type: "submit" }, "Add Goal")
+    );
+
+    var grid;
+    if (state.sinkingFunds.length === 0) {
+      grid = el("div", { class: "empty-note" }, "No sinking funds yet. Add a savings goal above.");
+    } else {
+      grid = el("div", { class: "funds-grid" },
+        state.sinkingFunds.map(function (f) {
+          return el("div", { class: "fund-card", dataset: { fundId: f.id } },
+            el("h3", {},
+              el("input", {
+                value: f.name,
+                style: { background: "transparent", border: "none", color: "inherit", fontSize: "15px", fontWeight: "600", padding: "0" },
+                oninput: function (e) { f.name = e.target.value; save(); }
+              }),
+              el("button", { class: "icon-btn", title: "Delete", onclick: function () {
+                state.sinkingFunds = state.sinkingFunds.filter(function (x) { return x.id !== f.id; });
+                save(); fullRender();
+              } }, "✕")
+            ),
+            el("div", { class: "fund-meta" },
+              el("span", { class: "f-target" }, "—"),
+              el("span", { class: "f-saved" }, "—")
+            ),
+            el("div", { class: "progress-track" }, el("div", { class: "progress-fill", style: { width: "0%" } })),
+            el("div", { class: "fund-meta" },
+              el("span", { class: "f-pct" }, "—"),
+              el("span", { class: "f-monthsleft" }, "—"),
+              el("span", { class: "f-completion" }, "—")
+            ),
+            el("div", { style: { display: "flex", gap: "8px", marginTop: "8px", alignItems: "center", flexWrap: "wrap" } },
+              el("label", { style: { fontSize: "12px", color: "var(--text-dim)" } }, "Monthly"),
+              el("input", {
+                type: "number", step: "0.01", value: f.monthlyContribution, style: { width: "80px" },
+                oninput: function (e) { f.monthlyContribution = num(e.target.value); save(); updateComputed(); }
+              }),
+              el("label", { style: { fontSize: "12px", color: "var(--text-dim)" } }, "Saved"),
+              el("input", {
+                type: "number", step: "0.01", value: f.saved, style: { width: "90px" },
+                oninput: function (e) { f.saved = num(e.target.value); save(); updateComputed(); }
+              })
+            ),
+            el("div", { class: "fund-actions" },
+              el("button", { onclick: function () { f.saved = num(f.saved) + num(f.monthlyContribution); save(); fullRender(); } },
+                "+ Log monthly contribution")
+            )
+          );
+        })
+      );
+    }
+
+    return el("section", { class: "block" },
+      el("h2", {}, "Sinking Funds"),
+      form,
+      grid
+    );
+  }
+
+  /* ---------- full render ---------- */
+  function fullRender() {
+    ensureMonth(state.currentMonth);
+    var root = document.getElementById("root");
+    root.innerHTML = "";
+    append(root, renderHeader());
+    append(root, renderInstallBanner());
+    append(root, renderSummary());
+    append(root, renderCategories());
+    append(root, renderTransactions());
+    append(root, renderFunds());
+    append(root, el("footer", { class: "app-footer" }, "All data is stored locally on this device. No account, no servers."));
+    updateComputed();
+  }
+
+  /* ---------- PWA ---------- */
+  if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0) {
+    navigator.serviceWorker.register("./sw.js").catch(function () {});
+  }
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    installEvent = e;
+    fullRender();
+  });
+
+  fullRender();
+})();
 </script>
 </body>
 </html>
