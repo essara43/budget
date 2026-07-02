@@ -114,7 +114,11 @@
     justify-content: space-between;
     align-items: center;
   }
-  .category-card .cat-totals { font-size: 12px; color: var(--text-dim); margin-bottom: 10px; }
+  .category-card .planned-row { display: flex; align-items: center; gap: 8px; margin: 6px 0 10px; }
+  .category-card .planned-row label { font-size: 12px; color: var(--text-dim); }
+  .category-card .planned-row input { flex: 1; min-width: 0; text-align: right; }
+  .category-card .planned-row .cur-symbol { font-size: 13px; color: var(--text-dim); }
+  .category-card .cat-totals { font-size: 14px; font-weight: 600; color: var(--text); }
   .subcat-row {
     display: flex;
     align-items: center;
@@ -386,40 +390,55 @@
     parent.appendChild(typeof kid === "object" ? kid : document.createTextNode(String(kid)));
   }
 
-  /* ---------- data ---------- */
+  /* ---------- data ----------
+     Model: one planned amount per category (no sub-categories).
+     categories = { Income: { planned: N }, Expenses: { planned: N }, ... } */
   function defaultCategories() {
-    return {
-      Income: [{ id: uid(), name: "Salary", planned: 0 }],
-      Expenses: [
-        { id: uid(), name: "Groceries", planned: 0 },
-        { id: uid(), name: "Transport", planned: 0 }
-      ],
-      Bills: [
-        { id: uid(), name: "Rent", planned: 0 },
-        { id: uid(), name: "Utilities", planned: 0 }
-      ],
-      Subscriptions: [{ id: uid(), name: "Streaming", planned: 0 }],
-      Debts: [{ id: uid(), name: "Credit Card", planned: 0 }],
-      Savings: [{ id: uid(), name: "Emergency Fund", planned: 0 }]
-    };
+    var c = {};
+    FIXED_CATEGORIES.forEach(function (cat) { c[cat] = { planned: 0 }; });
+    return c;
+  }
+  // Convert any category value (old array-of-subs format or new object) to { planned }.
+  function migrateCategories(categories) {
+    var next = {};
+    categories = categories || {};
+    FIXED_CATEGORIES.forEach(function (cat) {
+      var v = categories[cat];
+      if (Array.isArray(v)) {
+        var sum = 0;
+        v.forEach(function (s) { sum += num(s.planned); });
+        next[cat] = { planned: sum };
+      } else if (v && typeof v === "object") {
+        next[cat] = { planned: num(v.planned) };
+      } else {
+        next[cat] = { planned: 0 };
+      }
+    });
+    return next;
   }
   function cloneCategoriesForNewMonth(categories) {
     var next = {};
     FIXED_CATEGORIES.forEach(function (cat) {
-      next[cat] = (categories[cat] || []).map(function (s) {
-        return { id: uid(), name: s.name, planned: s.planned };
-      });
+      next[cat] = { planned: num((categories[cat] || {}).planned) };
     });
     return next;
   }
   function loadData() {
+    var d;
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw) d = JSON.parse(raw);
     } catch (e) { /* ignore */ }
-    var today = monthKey(new Date());
-    var d = { currency: "EUR", currentMonth: today, months: {}, sinkingFunds: [] };
-    d.months[today] = { categories: defaultCategories(), transactions: [] };
+    if (!d) {
+      var today = monthKey(new Date());
+      d = { currency: "EUR", currentMonth: today, months: {}, sinkingFunds: [] };
+      d.months[today] = { categories: defaultCategories(), transactions: [] };
+      return d;
+    }
+    // migrate any stored month to the single-planned-per-category model
+    Object.keys(d.months || {}).forEach(function (mk) {
+      d.months[mk].categories = migrateCategories(d.months[mk].categories);
+    });
     return d;
   }
   function save() {
@@ -440,19 +459,11 @@
   }
   function currentMonthData() { return ensureMonth(state.currentMonth); }
 
-  function spentMap(transactions) {
-    var m = {};
-    transactions.forEach(function (tx) {
-      var key = tx.category + "::" + tx.subCategory;
-      m[key] = (m[key] || 0) + num(tx.amount);
-    });
-    return m;
-  }
   function computeTotals(md) {
     var plannedIncome = 0, plannedOutflow = 0, spent = 0, actualIncome = 0;
-    (md.categories.Income || []).forEach(function (s) { plannedIncome += num(s.planned); });
+    plannedIncome = num((md.categories.Income || {}).planned);
     OUTFLOW_CATEGORIES.forEach(function (cat) {
-      (md.categories[cat] || []).forEach(function (s) { plannedOutflow += num(s.planned); });
+      plannedOutflow += num((md.categories[cat] || {}).planned);
     });
     md.transactions.forEach(function (tx) {
       if (tx.category === "Income") actualIncome += num(tx.amount);
@@ -566,7 +577,7 @@
 
   function renderSummary() {
     var defs = [
-      { id: "plannedIncome", label: "Planned Income" },
+      { id: "plannedIncome", label: "Income" },
       { id: "spent", label: "Spent" },
       { id: "leftToSpend", label: "Left to Spend" }
     ];
@@ -586,30 +597,18 @@
       el("h2", {}, "Envelopes"),
       el("div", { class: "categories-grid" },
         FIXED_CATEGORIES.map(function (cat) {
-          var subs = md.categories[cat] || [];
+          var c = md.categories[cat] || { planned: 0 };
           return el("div", { class: "category-card" },
             el("h3", {}, cat),
-            el("div", { class: "cat-totals", dataset: { catTotals: cat } }, "—"),
-            subs.map(function (sub) {
-              return el("div", { class: "subcat-row" },
-                el("input", {
-                  class: "name", value: sub.name,
-                  oninput: function (e) { sub.name = e.target.value; save(); updateComputed(); }
-                }),
-                el("input", {
-                  class: "planned", type: "number", step: "0.01", value: sub.planned,
-                  oninput: function (e) { sub.planned = e.target.value === "" ? 0 : num(e.target.value); save(); updateComputed(); }
-                }),
-                el("button", { class: "icon-btn", title: "Remove", onclick: function () {
-                  md.categories[cat] = subs.filter(function (s) { return s.id !== sub.id; });
-                  save(); fullRender();
-                } }, "✕")
-              );
-            }),
-            el("button", { class: "add-link", onclick: function () {
-              md.categories[cat].push({ id: uid(), name: "New item", planned: 0 });
-              save(); fullRender();
-            } }, "+ Add sub-category")
+            el("div", { class: "planned-row" },
+              el("label", {}, "Planned"),
+              el("input", {
+                type: "number", step: "0.01", value: c.planned,
+                oninput: function (e) { c.planned = e.target.value === "" ? 0 : num(e.target.value); save(); updateComputed(); }
+              }),
+              el("span", { class: "cur-symbol" }, (CURRENCIES.filter(function (x) { return x.code === state.currency; })[0] || CURRENCIES[0]).symbol)
+            ),
+            el("div", { class: "cat-totals", dataset: { catTotals: cat } }, "—")
           );
         })
       )
