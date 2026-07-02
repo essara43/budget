@@ -158,11 +158,26 @@
   .tx-amount { text-align: right; font-weight: 500; }
   .tx-form {
     display: grid;
-    grid-template-columns: 110px 130px 1fr 90px 1fr auto;
+    grid-template-columns: 130px 150px 110px 1fr auto;
     gap: 8px;
     margin-bottom: 16px;
     align-items: center;
   }
+  .chart-wrap {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 24px;
+  }
+  .chart-legend { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+  .chart-legend .row { display: flex; align-items: center; gap: 8px; }
+  .chart-legend .swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .chart-legend .lg-name { min-width: 96px; }
+  .chart-legend .lg-val { color: var(--text-dim); }
   @media (max-width: 760px) {
     .tx-form { grid-template-columns: 1fr 1fr; }
   }
@@ -284,7 +299,34 @@
     { code: "AUD", symbol: "AU$" }
   ];
 
+  var CATEGORY_COLORS = {
+    Expenses: "#60a5fa",
+    Bills: "#fbbf24",
+    Subscriptions: "#a78bfa",
+    Debts: "#f87171",
+    Savings: "#34d399"
+  };
+
   /* ---------- helpers ---------- */
+  function svgEl(tag, attrs) {
+    var e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (var k in attrs) { if (attrs[k] != null) e.setAttribute(k, attrs[k]); }
+    return e;
+  }
+  function slicePath(cx, cy, r, a0, a1) {
+    var x0 = cx + r * Math.sin(a0), y0 = cy - r * Math.cos(a0);
+    var x1 = cx + r * Math.sin(a1), y1 = cy - r * Math.cos(a1);
+    var large = (a1 - a0) > Math.PI ? 1 : 0;
+    return "M" + cx + "," + cy + " L" + x0 + "," + y0 +
+      " A" + r + "," + r + " 0 " + large + " 1 " + x1 + "," + y1 + " Z";
+  }
+  function categorySpent(md) {
+    var m = {};
+    md.transactions.forEach(function (tx) {
+      m[tx.category] = (m[tx.category] || 0) + num(tx.amount);
+    });
+    return m;
+  }
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
@@ -430,45 +472,25 @@
   /* ---------- live (non-destructive) recompute ---------- */
   function updateComputed() {
     var md = currentMonthData();
-    var sm = spentMap(md.transactions);
+    var cs = categorySpent(md);
     var t = computeTotals(md);
     var cur = state.currency;
 
     var sumDefs = {
       plannedIncome: { v: t.plannedIncome, cls: "" },
-      plannedOutflow: { v: t.plannedOutflow, cls: "" },
-      leftToBudget: { v: t.leftToBudget, cls: t.leftToBudget < 0 ? "neg" : "pos" },
       spent: { v: t.spent, cls: "" },
-      leftToSpend: { v: t.leftToSpend, cls: t.leftToSpend < 0 ? "neg" : "pos" },
-      projectedBalance: { v: t.projectedBalance, cls: t.projectedBalance < 0 ? "neg" : "pos" }
+      leftToSpend: { v: t.leftToSpend, cls: t.leftToSpend < 0 ? "neg" : "pos" }
     };
     Object.keys(sumDefs).forEach(function (id) {
       var node = document.querySelector('[data-sum="' + id + '"]');
       if (node) { node.textContent = formatMoney(sumDefs[id].v, cur); node.className = "value " + sumDefs[id].cls; }
     });
 
-    // category totals
+    // category totals (actual only, computed per category)
     var catNodes = document.querySelectorAll("[data-cat-totals]");
     Array.prototype.forEach.call(catNodes, function (node) {
       var cat = node.getAttribute("data-cat-totals");
-      var subs = md.categories[cat] || [];
-      var planned = 0, spent = 0;
-      subs.forEach(function (s) {
-        planned += num(s.planned);
-        spent += sm[cat + "::" + s.name] || 0;
-      });
-      node.textContent = "Planned " + formatMoney(planned, cur) + " · " +
-        (cat === "Income" ? "Received " : "Spent ") + formatMoney(spent, cur);
-    });
-
-    // per-subcat spent tags
-    var tagNodes = document.querySelectorAll("[data-spent-sub]");
-    Array.prototype.forEach.call(tagNodes, function (node) {
-      var cat = node.getAttribute("data-spent-cat");
-      var id = node.getAttribute("data-spent-sub");
-      var subs = md.categories[cat] || [];
-      var sub = subs.filter(function (s) { return s.id === id; })[0];
-      if (sub) node.textContent = formatMoney(sm[cat + "::" + sub.name] || 0, cur);
+      node.textContent = (cat === "Income" ? "Received " : "Spent ") + formatMoney(cs[cat] || 0, cur);
     });
 
     // funds
@@ -545,11 +567,8 @@
   function renderSummary() {
     var defs = [
       { id: "plannedIncome", label: "Planned Income" },
-      { id: "plannedOutflow", label: "Planned Outflow" },
-      { id: "leftToBudget", label: "Left to Budget" },
       { id: "spent", label: "Spent" },
-      { id: "leftToSpend", label: "Left to Spend" },
-      { id: "projectedBalance", label: "Projected Balance" }
+      { id: "leftToSpend", label: "Left to Spend" }
     ];
     return el("div", { class: "summary-grid" },
       defs.map(function (d) {
@@ -581,7 +600,6 @@
                   class: "planned", type: "number", step: "0.01", value: sub.planned,
                   oninput: function (e) { sub.planned = e.target.value === "" ? 0 : num(e.target.value); save(); updateComputed(); }
                 }),
-                el("span", { class: "spent-tag", dataset: { spentSub: sub.id, spentCat: cat } }, "—"),
                 el("button", { class: "icon-btn", title: "Remove", onclick: function () {
                   md.categories[cat] = subs.filter(function (s) { return s.id !== sub.id; });
                   save(); fullRender();
@@ -605,30 +623,20 @@
     var dateInput = el("input", { type: "date", value: todayStr, required: "required" });
     var catSelect = el("select", {});
     FIXED_CATEGORIES.forEach(function (c) { catSelect.appendChild(el("option", { value: c }, c)); });
-    var subSelect = el("select", {});
-
-    function fillSubs() {
-      subSelect.innerHTML = "";
-      var subs = md.categories[catSelect.value] || [];
-      if (subs.length === 0) subSelect.appendChild(el("option", { value: "" }, "(no sub-categories)"));
-      subs.forEach(function (s) { subSelect.appendChild(el("option", { value: s.name }, s.name)); });
-    }
-    catSelect.addEventListener("change", fillSubs);
-    fillSubs();
 
     var amountInput = el("input", { type: "number", step: "0.01", placeholder: "Amount", required: "required" });
     var descInput = el("input", { type: "text", placeholder: "Description" });
 
     var form = el("form", { class: "tx-form", onsubmit: function (e) {
       e.preventDefault();
-      if (!subSelect.value || amountInput.value === "") return;
+      if (amountInput.value === "") return;
       md.transactions.push({
         id: uid(), date: dateInput.value, category: catSelect.value,
-        subCategory: subSelect.value, amount: num(amountInput.value), description: descInput.value
+        amount: num(amountInput.value), description: descInput.value
       });
       save(); fullRender();
     } },
-      dateInput, catSelect, subSelect, amountInput, descInput,
+      dateInput, catSelect, amountInput, descInput,
       el("button", { class: "btn-primary", type: "submit" }, "Add")
     );
 
@@ -639,12 +647,12 @@
     } else {
       tableArea = el("table", {},
         el("thead", {}, el("tr", {},
-          el("th", {}, "Date"), el("th", {}, "Category"), el("th", {}, "Sub-category"),
+          el("th", {}, "Date"), el("th", {}, "Category"),
           el("th", {}, "Description"), el("th", { style: { textAlign: "right" } }, "Amount"), el("th", {})
         )),
         el("tbody", {}, sorted.map(function (tx) {
           return el("tr", {},
-            el("td", {}, tx.date), el("td", {}, tx.category), el("td", {}, tx.subCategory),
+            el("td", {}, tx.date), el("td", {}, tx.category),
             el("td", {}, tx.description), el("td", { class: "tx-amount" }, formatMoney(tx.amount, state.currency)),
             el("td", {}, el("button", { class: "icon-btn", title: "Delete", onclick: function () {
               md.transactions = md.transactions.filter(function (t) { return t.id !== tx.id; });
@@ -736,6 +744,69 @@
     );
   }
 
+  function renderChart() {
+    var md = currentMonthData();
+    var cs = categorySpent(md);
+    var data = OUTFLOW_CATEGORIES
+      .map(function (c) { return { cat: c, val: cs[c] || 0 }; })
+      .filter(function (d) { return d.val > 0; });
+    var total = data.reduce(function (s, d) { return s + d.val; }, 0);
+
+    var section = el("section", { class: "block" }, el("h2", {}, "Spending by category"));
+    if (total <= 0) {
+      section.appendChild(el("div", { class: "empty-note" }, "No spending recorded this month yet."));
+      return section;
+    }
+
+    var size = 180, r = 82, cx = 90, cy = 90;
+    var svg = svgEl("svg", { width: size, height: size, viewBox: "0 0 " + size + " " + size });
+    if (data.length === 1) {
+      svg.appendChild(svgEl("circle", { cx: cx, cy: cy, r: r, fill: CATEGORY_COLORS[data[0].cat] || "#888" }));
+    } else {
+      var angle = 0;
+      data.forEach(function (d) {
+        var a0 = angle, a1 = angle + (d.val / total) * 2 * Math.PI;
+        angle = a1;
+        svg.appendChild(svgEl("path", {
+          d: slicePath(cx, cy, r, a0, a1),
+          fill: CATEGORY_COLORS[d.cat] || "#888",
+          stroke: "#171a21", "stroke-width": 2
+        }));
+      });
+    }
+    // donut hole + total in center
+    svg.appendChild(svgEl("circle", { cx: cx, cy: cy, r: 46, fill: "#171a21" }));
+
+    var legend = el("div", { class: "chart-legend" },
+      data.map(function (d) {
+        var pct = Math.round((d.val / total) * 100);
+        return el("div", { class: "row" },
+          el("span", { class: "swatch", style: { background: CATEGORY_COLORS[d.cat] || "#888" } }),
+          el("span", { class: "lg-name" }, d.cat),
+          el("span", { class: "lg-val" }, formatMoney(d.val, state.currency) + " · " + pct + "%")
+        );
+      })
+    );
+
+    var chartArea = el("div", { class: "chart-wrap" });
+    var svgBox = el("div", { style: { position: "relative", width: size + "px", height: size + "px", flex: "none" } });
+    svgBox.appendChild(svg);
+    svgBox.appendChild(el("div", {
+      style: {
+        position: "absolute", top: "0", left: "0", width: size + "px", height: size + "px",
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        pointerEvents: "none"
+      }
+    },
+      el("div", { style: { fontSize: "11px", color: "var(--text-dim)" } }, "Total spent"),
+      el("div", { style: { fontSize: "17px", fontWeight: "700" } }, formatMoney(total, state.currency))
+    ));
+    chartArea.appendChild(svgBox);
+    chartArea.appendChild(legend);
+    section.appendChild(chartArea);
+    return section;
+  }
+
   /* ---------- full render ---------- */
   function fullRender() {
     ensureMonth(state.currentMonth);
@@ -744,6 +815,7 @@
     append(root, renderHeader());
     append(root, renderInstallBanner());
     append(root, renderSummary());
+    append(root, renderChart());
     append(root, renderCategories());
     append(root, renderTransactions());
     append(root, renderFunds());
