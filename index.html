@@ -7,35 +7,40 @@
 
 <!-- PWA -->
 <link rel="manifest" href="./manifest.json" />
-<meta name="theme-color" content="#0f1115" />
+<meta name="theme-color" content="#ffd3e6" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="apple-mobile-web-app-title" content="Budget" />
 <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 <link rel="icon" href="./icons/icon-512.png" />
 
 <style>
   :root {
-    --bg: #0f1115;
-    --bg-elev: #171a21;
-    --bg-elev-2: #1e2229;
-    --border: #2a2f3a;
-    --text: #e8eaed;
-    --text-dim: #9aa3b2;
-    --accent: #34d399;
-    --accent-dim: #1f6f56;
-    --red: #f87171;
-    --yellow: #fbbf24;
-    --blue: #60a5fa;
-    --radius: 12px;
+    --bg: #fff0f6;
+    --bg-elev: #ffffff;
+    --bg-elev-2: #fff2f8;
+    --border: #ffd3e6;
+    --text: #6d4257;
+    --text-dim: #c087a4;
+    --accent: #ff85b3;
+    --accent-dim: #ffc2da;
+    --red: #ff6f91;
+    --yellow: #ffcf5c;
+    --blue: #8ecae6;
+    --radius: 18px;
+    --shadow: 0 6px 18px rgba(255, 133, 179, 0.18);
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background: var(--bg);
+    background:
+      radial-gradient(1200px 600px at 100% -10%, #ffe0ef 0%, rgba(255,224,239,0) 60%),
+      radial-gradient(900px 500px at -10% 110%, #e9dcff 0%, rgba(233,220,255,0) 55%),
+      var(--bg);
+    background-attachment: fixed;
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Comic Sans MS", "Quicksand", Roboto, Helvetica, Arial, sans-serif;
     padding-bottom: 60px;
   }
   #root { max-width: 1100px; margin: 0 auto; padding: 16px; }
@@ -50,12 +55,14 @@
     border-bottom: 1px solid var(--border);
     margin-bottom: 20px;
   }
-  header.top h1 { font-size: 20px; margin: 0; font-weight: 600; }
+  header.top h1 { font-size: 22px; margin: 0; font-weight: 800; letter-spacing: 0.3px; }
   .month-switcher { display: flex; align-items: center; gap: 8px; }
   .month-switcher button.nav {
-    background: var(--bg-elev-2); border: 1px solid var(--border); color: var(--text);
-    border-radius: 8px; width: 32px; height: 32px; cursor: pointer; font-size: 16px;
+    background: var(--bg-elev); border: 2px solid var(--border); color: var(--accent);
+    border-radius: 999px; width: 34px; height: 34px; cursor: pointer; font-size: 16px;
+    box-shadow: var(--shadow);
   }
+  .month-switcher button.nav:hover { background: var(--accent-dim); }
   .month-label { min-width: 140px; text-align: center; font-weight: 500; }
   select, input, textarea {
     background: var(--bg-elev-2);
@@ -77,9 +84,10 @@
   }
   .summary-card {
     background: var(--bg-elev);
-    border: 1px solid var(--border);
+    border: 2px solid var(--border);
     border-radius: var(--radius);
     padding: 14px;
+    box-shadow: var(--shadow);
   }
   .summary-card .label { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
   .summary-card .value { font-size: 19px; font-weight: 600; }
@@ -88,9 +96,10 @@
 
   section.block { margin-bottom: 32px; }
   section.block > h2 {
-    font-size: 16px;
+    font-size: 17px;
     margin: 0 0 12px;
-    color: var(--text);
+    color: var(--accent);
+    font-weight: 800;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -103,9 +112,10 @@
   }
   .category-card {
     background: var(--bg-elev);
-    border: 1px solid var(--border);
+    border: 2px solid var(--border);
     border-radius: var(--radius);
     padding: 14px;
+    box-shadow: var(--shadow);
   }
   .category-card h3 {
     margin: 0 0 4px;
@@ -169,8 +179,9 @@
   }
   .chart-wrap {
     background: var(--bg-elev);
-    border: 1px solid var(--border);
+    border: 2px solid var(--border);
     border-radius: var(--radius);
+    box-shadow: var(--shadow);
     padding: 16px;
     display: flex;
     flex-wrap: wrap;
@@ -187,7 +198,7 @@
   }
   .btn-primary {
     background: var(--accent);
-    color: #06241a;
+    color: #ffffff;
     border: none;
     border-radius: 8px;
     padding: 8px 14px;
@@ -196,7 +207,7 @@
     font-size: 13px;
   }
   .btn-primary:hover { opacity: 0.9; }
-  .table-wrap { overflow-x: auto; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 12px; }
+  .table-wrap { overflow-x: auto; background: var(--bg-elev); border: 2px solid var(--border); border-radius: var(--radius); padding: 4px 12px; box-shadow: var(--shadow); }
   .empty-note { color: var(--text-dim); font-size: 13px; padding: 16px 0; text-align: center; }
 
   .funds-grid {
@@ -206,9 +217,10 @@
   }
   .fund-card {
     background: var(--bg-elev);
-    border: 1px solid var(--border);
+    border: 2px solid var(--border);
     border-radius: var(--radius);
     padding: 14px;
+    box-shadow: var(--shadow);
   }
   .fund-card h3 { margin: 0 0 8px; font-size: 15px; display: flex; justify-content: space-between; }
   .fund-meta { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 10px; }
@@ -283,7 +295,7 @@
   .install-banner button {
     background: var(--accent);
     border: none;
-    color: #06241a;
+    color: #ffffff;
     border-radius: 8px;
     padding: 6px 12px;
     font-weight: 600;
@@ -318,11 +330,11 @@
   ];
 
   var CATEGORY_COLORS = {
-    Expenses: "#60a5fa",
-    Bills: "#fbbf24",
-    Subscriptions: "#a78bfa",
-    Debts: "#f87171",
-    Savings: "#34d399"
+    Expenses: "#8ecae6",
+    Bills: "#ffd166",
+    Subscriptions: "#c9a7eb",
+    Debts: "#ff9aa2",
+    Savings: "#a0e7c8"
   };
 
   /* ---------- helpers ---------- */
@@ -552,7 +564,7 @@
   /* ---------- sections ---------- */
   function renderHeader() {
     return el("header", { class: "top" },
-      el("h1", {}, "💶 Budget Planner"),
+      el("h1", {}, "🌸 Budget Planner"),
       el("div", { class: "month-switcher" },
         el("button", { class: "nav", onclick: function () { state.currentMonth = shiftMonth(state.currentMonth, -1); save(); fullRender(); } }, "‹"),
         el("div", { class: "month-label" }, monthLabel(state.currentMonth)),
@@ -608,7 +620,7 @@
   function renderCategories() {
     var md = currentMonthData();
     return el("section", { class: "block" },
-      el("h2", {}, "Envelopes"),
+      el("h2", {}, "🧁 Envelopes"),
       el("div", { class: "categories-grid" },
         FIXED_CATEGORIES.map(function (cat) {
           var c = md.categories[cat] || { planned: 0 };
@@ -677,7 +689,7 @@
     }
 
     return el("section", { class: "block" },
-      el("h2", {}, "Transactions"),
+      el("h2", {}, "🍡 Transactions"),
       form,
       el("div", { class: "table-wrap" }, tableArea)
     );
@@ -751,7 +763,7 @@
     }
 
     return el("section", { class: "block" },
-      el("h2", {}, "Sinking Funds"),
+      el("h2", {}, "🐷 Sinking Funds"),
       form,
       grid
     );
@@ -765,7 +777,7 @@
       .filter(function (d) { return d.val > 0; });
     var total = data.reduce(function (s, d) { return s + d.val; }, 0);
 
-    var section = el("section", { class: "block" }, el("h2", {}, "Spending by category"));
+    var section = el("section", { class: "block" }, el("h2", {}, "🍰 Spending by category"));
     if (total <= 0) {
       section.appendChild(el("div", { class: "empty-note" }, "No spending recorded this month yet."));
       return section;
@@ -783,12 +795,12 @@
         svg.appendChild(svgEl("path", {
           d: slicePath(cx, cy, r, a0, a1),
           fill: CATEGORY_COLORS[d.cat] || "#888",
-          stroke: "#171a21", "stroke-width": 2
+          stroke: "#ffffff", "stroke-width": 3
         }));
       });
     }
     // donut hole + total in center
-    svg.appendChild(svgEl("circle", { cx: cx, cy: cy, r: 46, fill: "#171a21" }));
+    svg.appendChild(svgEl("circle", { cx: cx, cy: cy, r: 46, fill: "#ffffff" }));
 
     var legend = el("div", { class: "chart-legend" },
       data.map(function (d) {
