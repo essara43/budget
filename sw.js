@@ -1,4 +1,4 @@
-const CACHE_NAME = "budget-planner-v1";
+const CACHE_NAME = "budget-planner-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -25,18 +25,17 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+// Network-first so a fresh deploy is always picked up when online;
+// fall back to cache only when the network is unavailable (offline PWA).
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-          return res;
-        })
-        .catch(() => cached);
-    })
+    fetch(event.request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
