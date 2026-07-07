@@ -500,23 +500,15 @@
   function currentMonthData() { return ensureMonth(state.currentMonth); }
 
   function computeTotals(md) {
-    var plannedIncome = 0, plannedOutflow = 0, spent = 0, actualIncome = 0;
-    plannedIncome = num((md.categories.Income || {}).planned);
-    OUTFLOW_CATEGORIES.forEach(function (cat) {
-      plannedOutflow += num((md.categories[cat] || {}).planned);
-    });
+    var spent = 0, actualIncome = 0;
     md.transactions.forEach(function (tx) {
       if (tx.category === "Income") actualIncome += num(tx.amount);
       else spent += num(tx.amount);
     });
     return {
-      plannedIncome: plannedIncome,
-      plannedOutflow: plannedOutflow,
-      leftToBudget: plannedIncome - plannedOutflow,
+      income: actualIncome,
       spent: spent,
-      leftToSpend: plannedOutflow - spent,
-      projectedBalance: plannedIncome - spent,
-      actualIncome: actualIncome
+      leftToSpend: actualIncome - spent
     };
   }
 
@@ -528,7 +520,7 @@
     var cur = state.currency;
 
     var sumDefs = {
-      plannedIncome: { v: t.plannedIncome, cls: "" },
+      income: { v: t.income, cls: "" },
       spent: { v: t.spent, cls: "" },
       leftToSpend: { v: t.leftToSpend, cls: t.leftToSpend < 0 ? "neg" : "pos" }
     };
@@ -617,7 +609,7 @@
 
   function renderSummary() {
     var defs = [
-      { id: "plannedIncome", label: "Income" },
+      { id: "income", label: "Income" },
       { id: "spent", label: "Spent" },
       { id: "leftToSpend", label: "Left to Spend" }
     ];
@@ -637,17 +629,8 @@
       el("h2", {}, "🧁 Envelopes"),
       el("div", { class: "categories-grid" },
         FIXED_CATEGORIES.map(function (cat) {
-          var c = md.categories[cat] || { planned: 0 };
           return el("div", { class: "category-card" },
             el("h3", {}, cat),
-            el("div", { class: "planned-row" },
-              el("label", {}, "Planned"),
-              el("input", {
-                type: "number", step: "0.01", value: c.planned,
-                oninput: function (e) { c.planned = e.target.value === "" ? 0 : num(e.target.value); save(); updateComputed(); }
-              }),
-              el("span", { class: "cur-symbol" }, (CURRENCIES.filter(function (x) { return x.code === state.currency; })[0] || CURRENCIES[0]).symbol)
-            ),
             el("div", { class: "cat-totals", dataset: { catTotals: cat } }, "—")
           );
         })
