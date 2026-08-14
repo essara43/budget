@@ -284,13 +284,27 @@
     align-items: center;
     gap: 12px;
   }
+  .footer-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .footer-btn {
+    background: var(--bg-elev);
+    border: 2px solid var(--border);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 7px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+  }
+  .footer-btn:hover { background: var(--accent-dim); }
   .reset-btn {
     background: transparent;
-    border: 1px solid var(--border);
+    border: 2px solid var(--border);
     color: var(--red);
-    border-radius: 8px;
-    padding: 7px 14px;
+    border-radius: 999px;
+    padding: 7px 16px;
     font-size: 12px;
+    font-weight: 600;
     cursor: pointer;
   }
   .reset-btn:hover { border-color: var(--red); background: rgba(248, 113, 113, 0.08); }
@@ -464,6 +478,24 @@
     });
     return next;
   }
+  // Normalize a parsed data object (from storage or an imported file).
+  function migrateLoaded(d) {
+    if (!d || typeof d !== "object") d = {};
+    if (!d.months || typeof d.months !== "object") d.months = {};
+    if (!Array.isArray(d.sinkingFunds)) d.sinkingFunds = [];
+    if (!d.currency) d.currency = "EUR";
+    Object.keys(d.months).forEach(function (mk) {
+      var m = d.months[mk] || {};
+      m.categories = migrateCategories(m.categories);
+      if (!Array.isArray(m.transactions)) m.transactions = [];
+      d.months[mk] = m;
+    });
+    var keys = Object.keys(d.months);
+    if (!d.currentMonth || !d.months[d.currentMonth]) {
+      d.currentMonth = keys.length ? keys.sort()[keys.length - 1] : monthKey(new Date());
+    }
+    return d;
+  }
   function loadData() {
     var d;
     try {
@@ -476,11 +508,23 @@
       d.months[today] = { categories: defaultCategories(), transactions: [] };
       return d;
     }
-    // migrate any stored month to the single-planned-per-category model
-    Object.keys(d.months || {}).forEach(function (mk) {
-      d.months[mk].categories = migrateCategories(d.months[mk].categories);
-    });
-    return d;
+    return migrateLoaded(d);
+  }
+  function exportData() {
+    try {
+      var json = JSON.stringify(state, null, 2);
+      var blob = new Blob([json], { type: "application/json" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "budget-planner-" + monthKey(new Date()) + ".json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    } catch (e) {
+      window.alert("Export failed: " + e.message);
+    }
   }
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
@@ -881,18 +925,51 @@
     append(root, renderCategories());
     append(root, renderTransactions());
     append(root, renderFunds());
+    var importInput = el("input", {
+      type: "file", accept: "application/json,.json", style: { display: "none" },
+      onchange: function (e) {
+        var file = e.target.files && e.target.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function () {
+          try {
+            var parsed = JSON.parse(reader.result);
+            if (!parsed || typeof parsed !== "object" || !parsed.months) {
+              window.alert("This file doesn't look like a Budget Planner export.");
+              return;
+            }
+            if (window.confirm("Import this file? It will REPLACE all current data.")) {
+              // normalize through loadData's migration path
+              state = migrateLoaded(parsed);
+              save();
+              fullRender();
+            }
+          } catch (err) {
+            window.alert("Could not read this file (invalid JSON).");
+          }
+        };
+        reader.readAsText(file);
+        e.target.value = "";
+      }
+    });
+
     append(root, el("footer", { class: "app-footer" },
       el("div", {}, "All data is stored locally on this device. No account, no servers."),
-      el("button", {
-        class: "reset-btn",
-        onclick: function () {
-          if (window.confirm("Erase ALL budget data and start from zero? This cannot be undone.")) {
-            try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
-            state = loadData();
-            fullRender();
+      el("div", { class: "footer-actions" },
+        el("button", { class: "footer-btn", onclick: exportData }, "⬇ Export data"),
+        el("button", { class: "footer-btn", onclick: function () { importInput.click(); } }, "⬆ Import data"),
+        el("button", {
+          class: "reset-btn",
+          onclick: function () {
+            if (window.confirm("Erase ALL budget data and start from zero? This cannot be undone.")) {
+              try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+              state = loadData();
+              fullRender();
+            }
           }
-        }
-      }, "Reset all data")
+        }, "Reset all data")
+      ),
+      importInput
     ));
     updateComputed();
   }
