@@ -187,11 +187,26 @@
   td .row-edit[type="date"] { min-width: 120px; }
   .tx-form {
     display: grid;
-    grid-template-columns: 130px 150px 110px 1fr auto;
+    grid-template-columns: 120px 130px 130px 100px 1fr auto;
     gap: 8px;
     margin-bottom: 16px;
     align-items: center;
   }
+  .row-actions { display: flex; gap: 2px; white-space: nowrap; }
+  .manage-cat {
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    box-shadow: var(--shadow);
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+  .manage-cat .mc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  .manage-cat .mc-head input.mc-name { flex: 1; min-width: 120px; font-weight: 700; }
+  .manage-cat .mc-income { font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .manage-cat .mc-sub { display: flex; align-items: center; gap: 6px; margin: 4px 0 4px 18px; }
+  .manage-cat .mc-sub input { flex: 1; min-width: 0; }
+  .manage-cat .mc-badge { font-size: 11px; color: var(--accent); font-weight: 700; }
   .chart-wrap {
     background: var(--bg-elev);
     border: 2px solid var(--border);
@@ -346,8 +361,6 @@
   "use strict";
 
   var STORAGE_KEY = "budgetPlannerData_v1";
-  var FIXED_CATEGORIES = ["Income", "Expenses", "Bills", "Subscriptions", "Debts", "Savings"];
-  var OUTFLOW_CATEGORIES = ["Expenses", "Bills", "Subscriptions", "Debts", "Savings"];
   var CURRENCIES = [
     { code: "EUR", symbol: "€" },
     { code: "USD", symbol: "$" },
@@ -358,13 +371,7 @@
     { code: "AUD", symbol: "AU$" }
   ];
 
-  var CATEGORY_COLORS = {
-    Expenses: "#8ecae6",
-    Bills: "#ffd166",
-    Subscriptions: "#c9a7eb",
-    Debts: "#ff9aa2",
-    Savings: "#a0e7c8"
-  };
+  var COLOR_PALETTE = ["#8ecae6", "#ffd166", "#c9a7eb", "#ff9aa2", "#a0e7c8", "#f7a4c8", "#b5e48c", "#ffb4a2", "#a2d2ff", "#ffc6ff"];
 
   /* ---------- helpers ---------- */
   function svgEl(tag, attrs) {
@@ -379,12 +386,19 @@
     return "M" + cx + "," + cy + " L" + x0 + "," + y0 +
       " A" + r + "," + r + " 0 " + large + " 1 " + x1 + "," + y1 + " Z";
   }
-  function categorySpent(md) {
+  function catById(id) { return state.categories.filter(function (c) { return c.id === id; })[0]; }
+  function subById(cat, id) { if (!cat || !id) return null; return cat.subs.filter(function (s) { return s.id === id; })[0]; }
+  function isIncomeTx(tx) { var c = catById(tx.catId); return c ? !!c.income : false; }
+  // Total per category id (works for income & outflow), from a month's transactions.
+  function catTotals(md) {
     var m = {};
-    md.transactions.forEach(function (tx) {
-      m[tx.category] = (m[tx.category] || 0) + num(tx.amount);
-    });
+    md.transactions.forEach(function (tx) { m[tx.catId] = (m[tx.catId] || 0) + num(tx.amount); });
     return m;
+  }
+  function colorForCat(catId) {
+    var outflow = state.categories.filter(function (c) { return !c.income; });
+    var idx = outflow.map(function (c) { return c.id; }).indexOf(catId);
+    return COLOR_PALETTE[(idx < 0 ? 0 : idx) % COLOR_PALETTE.length];
   }
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -446,54 +460,95 @@
   }
 
   /* ---------- data ----------
-     Model: one planned amount per category (no sub-categories).
-     categories = { Income: { planned: N }, Expenses: { planned: N }, ... } */
-  function defaultCategories() {
-    var c = {};
-    FIXED_CATEGORIES.forEach(function (cat) { c[cat] = { planned: 0 }; });
-    return c;
+     Global taxonomy:
+       state.categories = [ { id, name, income:bool, subs:[ {id,name} ] } ]
+     Per month:
+       state.months[key] = { transactions: [ {id,date,catId,subId,amount,description} ] } */
+  function defaultTaxonomy() {
+    return [
+      { id: "cat_income", name: "Income", income: true, subs: [] },
+      { id: "cat_expenses", name: "Expenses", income: false, subs: [] },
+      { id: "cat_bills", name: "Bills", income: false, subs: [] },
+      { id: "cat_subscriptions", name: "Subscriptions", income: false, subs: [] },
+      { id: "cat_debts", name: "Debts", income: false, subs: [] },
+      { id: "cat_savings", name: "Savings", income: false, subs: [] }
+    ];
   }
-  // Convert any category value (old array-of-subs format or new object) to { planned }.
-  function migrateCategories(categories) {
-    var next = {};
-    categories = categories || {};
-    FIXED_CATEGORIES.forEach(function (cat) {
-      var v = categories[cat];
-      if (Array.isArray(v)) {
-        var sum = 0;
-        v.forEach(function (s) { sum += num(s.planned); });
-        next[cat] = { planned: sum };
-      } else if (v && typeof v === "object") {
-        next[cat] = { planned: num(v.planned) };
-      } else {
-        next[cat] = { planned: 0 };
-      }
-    });
-    return next;
+  function freshData() {
+    var today = monthKey(new Date());
+    var d = { currency: "EUR", currentMonth: today, categories: defaultTaxonomy(), months: {}, sinkingFunds: [] };
+    d.months[today] = { transactions: [] };
+    return d;
   }
-  function cloneCategoriesForNewMonth(categories) {
-    var next = {};
-    FIXED_CATEGORIES.forEach(function (cat) {
-      next[cat] = { planned: num((categories[cat] || {}).planned) };
-    });
-    return next;
-  }
-  // Normalize a parsed data object (from storage or an imported file).
+  // Normalize a parsed data object (from storage or an imported file), migrating
+  // older shapes (per-month name-keyed categories, name-based transactions).
   function migrateLoaded(d) {
     if (!d || typeof d !== "object") d = {};
-    if (!d.months || typeof d.months !== "object") d.months = {};
+    d.currency = d.currency || "EUR";
     if (!Array.isArray(d.sinkingFunds)) d.sinkingFunds = [];
-    if (!d.currency) d.currency = "EUR";
+    if (!d.months || typeof d.months !== "object") d.months = {};
+
+    var tax;
+    if (Array.isArray(d.categories) && d.categories.length) {
+      tax = d.categories.map(function (c) {
+        return {
+          id: c.id || uid(),
+          name: String(c.name || "Category"),
+          income: !!c.income,
+          subs: Array.isArray(c.subs) ? c.subs.map(function (s) { return { id: s.id || uid(), name: String(s.name || "Item") }; }) : []
+        };
+      });
+    } else {
+      tax = defaultTaxonomy();
+    }
+    function catByName(name) { return tax.filter(function (c) { return c.name === name; })[0]; }
+    function ensureCat(name) {
+      var c = catByName(name);
+      if (!c) { c = { id: uid(), name: name, income: (name === "Income"), subs: [] }; tax.push(c); }
+      return c;
+    }
+    function ensureSub(cat, name) {
+      if (!name) return null;
+      var s = cat.subs.filter(function (x) { return x.name === name; })[0];
+      if (!s) { s = { id: uid(), name: name }; cat.subs.push(s); }
+      return s;
+    }
+
     Object.keys(d.months).forEach(function (mk) {
       var m = d.months[mk] || {};
-      m.categories = migrateCategories(m.categories);
+      // old per-month name-keyed categories: fold any custom names into taxonomy
+      if (m.categories && !Array.isArray(m.categories)) {
+        Object.keys(m.categories).forEach(function (nm) { ensureCat(nm); });
+      }
+      delete m.categories;
       if (!Array.isArray(m.transactions)) m.transactions = [];
+      m.transactions = m.transactions.map(function (tx) {
+        var t = {
+          id: tx.id || uid(),
+          date: tx.date || (mk + "-01"),
+          amount: num(tx.amount),
+          description: tx.description || ""
+        };
+        if (tx.catId) {
+          t.catId = tx.catId;
+          t.subId = tx.subId || null;
+        } else {
+          var cat = ensureCat(tx.category || "Expenses");
+          t.catId = cat.id;
+          var sub = ensureSub(cat, tx.subCategory);
+          t.subId = sub ? sub.id : null;
+        }
+        return t;
+      });
       d.months[mk] = m;
     });
+    d.categories = tax;
+
     var keys = Object.keys(d.months);
     if (!d.currentMonth || !d.months[d.currentMonth]) {
       d.currentMonth = keys.length ? keys.sort()[keys.length - 1] : monthKey(new Date());
     }
+    if (!d.months[d.currentMonth]) d.months[d.currentMonth] = { transactions: [] };
     return d;
   }
   function loadData() {
@@ -502,12 +557,7 @@
       var raw = localStorage.getItem(STORAGE_KEY);
       if (raw) d = JSON.parse(raw);
     } catch (e) { /* ignore */ }
-    if (!d) {
-      var today = monthKey(new Date());
-      d = { currency: "EUR", currentMonth: today, months: {}, sinkingFunds: [] };
-      d.months[today] = { categories: defaultCategories(), transactions: [] };
-      return d;
-    }
+    if (!d) return freshData();
     return migrateLoaded(d);
   }
   function exportData() {
@@ -534,10 +584,7 @@
 
   function ensureMonth(key) {
     if (!state.months[key]) {
-      var keys = Object.keys(state.months).sort();
-      var last = keys[keys.length - 1];
-      var base = last ? state.months[last].categories : defaultCategories();
-      state.months[key] = { categories: cloneCategoriesForNewMonth(base), transactions: [] };
+      state.months[key] = { transactions: [] };
       save();
     }
     return state.months[key];
@@ -547,7 +594,7 @@
   function monthActuals(md) {
     var spent = 0, actualIncome = 0;
     md.transactions.forEach(function (tx) {
-      if (tx.category === "Income") actualIncome += num(tx.amount);
+      if (isIncomeTx(tx)) actualIncome += num(tx.amount);
       else spent += num(tx.amount);
     });
     return { spent: spent, actualIncome: actualIncome };
@@ -579,7 +626,7 @@
   /* ---------- live (non-destructive) recompute ---------- */
   function updateComputed() {
     var md = currentMonthData();
-    var cs = categorySpent(md);
+    var cs = catTotals(md);
     var t = computeTotals(md, state.currentMonth);
     var cur = state.currency;
 
@@ -597,11 +644,12 @@
       noteNode.textContent = t.carryover ? "incl. " + formatMoney(t.carryover, cur) + " from last month" : "";
     }
 
-    // category totals (actual only, computed per category)
+    // category totals (actual only, per category id)
     var catNodes = document.querySelectorAll("[data-cat-totals]");
     Array.prototype.forEach.call(catNodes, function (node) {
-      var cat = node.getAttribute("data-cat-totals");
-      node.textContent = (cat === "Income" ? "Received " : "Spent ") + formatMoney(cs[cat] || 0, cur);
+      var catId = node.getAttribute("data-cat-totals");
+      var c = catById(catId);
+      node.textContent = ((c && c.income) ? "Received " : "Spent ") + formatMoney(cs[catId] || 0, cur);
     });
 
     // funds
@@ -693,41 +741,54 @@
   }
 
   function renderCategories() {
-    var md = currentMonthData();
     return el("section", { class: "block" },
       el("h2", {}, "🧁 Envelopes"),
       el("div", { class: "categories-grid" },
-        FIXED_CATEGORIES.map(function (cat) {
+        state.categories.map(function (c) {
           return el("div", { class: "category-card" },
-            el("h3", {}, cat),
-            el("div", { class: "cat-totals", dataset: { catTotals: cat } }, "—")
+            el("h3", {}, c.name),
+            el("div", { class: "cat-totals", dataset: { catTotals: c.id } }, "—")
           );
         })
       )
     );
   }
 
+  function subOptionsFor(selectEl, catId, selectedSubId) {
+    selectEl.innerHTML = "";
+    selectEl.appendChild(el("option", { value: "", selected: !selectedSubId ? "selected" : null }, "—"));
+    var c = catById(catId);
+    if (c) c.subs.forEach(function (s) {
+      selectEl.appendChild(el("option", { value: s.id, selected: s.id === selectedSubId ? "selected" : null }, s.name));
+    });
+  }
+
   function renderTransactions() {
     var md = currentMonthData();
     var todayStr = new Date().toISOString().slice(0, 10);
+    var firstCat = state.categories[0];
 
     var dateInput = el("input", { type: "date", value: todayStr, required: "required" });
     var catSelect = el("select", {});
-    FIXED_CATEGORIES.forEach(function (c) { catSelect.appendChild(el("option", { value: c }, c)); });
+    state.categories.forEach(function (c) { catSelect.appendChild(el("option", { value: c.id }, c.name)); });
+    var subSelect = el("select", {});
+    function fillFormSubs() { subOptionsFor(subSelect, catSelect.value, ""); }
+    catSelect.addEventListener("change", fillFormSubs);
+    fillFormSubs();
 
     var amountInput = el("input", { type: "number", step: "0.01", placeholder: "Amount", required: "required" });
     var descInput = el("input", { type: "text", placeholder: "Description" });
 
     var form = el("form", { class: "tx-form", onsubmit: function (e) {
       e.preventDefault();
-      if (amountInput.value === "") return;
+      if (amountInput.value === "" || !catSelect.value) return;
       md.transactions.push({
-        id: uid(), date: dateInput.value, category: catSelect.value,
-        amount: num(amountInput.value), description: descInput.value
+        id: uid(), date: dateInput.value, catId: catSelect.value,
+        subId: subSelect.value || null, amount: num(amountInput.value), description: descInput.value
       });
       save(); fullRender();
     } },
-      dateInput, catSelect, amountInput, descInput,
+      dateInput, catSelect, subSelect, amountInput, descInput,
       el("button", { class: "btn-primary", type: "submit" }, "Add")
     );
 
@@ -738,20 +799,28 @@
     } else {
       tableArea = el("table", {},
         el("thead", {}, el("tr", {},
-          el("th", {}, "Date"), el("th", {}, "Category"),
+          el("th", {}, "Date"), el("th", {}, "Category"), el("th", {}, "Sub-category"),
           el("th", {}, "Description"), el("th", { style: { textAlign: "right" } }, "Amount"), el("th", {})
         )),
         el("tbody", {}, sorted.map(function (tx) {
-          var catSel = el("select", { class: "row-edit", onchange: function (e) { tx.category = e.target.value; save(); fullRender(); } });
-          FIXED_CATEGORIES.forEach(function (c) {
-            catSel.appendChild(el("option", { value: c, selected: c === tx.category ? "selected" : null }, c));
+          var rowCat = el("select", { class: "row-edit", onchange: function (e) {
+            tx.catId = e.target.value; tx.subId = null; save(); fullRender();
+          } });
+          state.categories.forEach(function (c) {
+            rowCat.appendChild(el("option", { value: c.id, selected: c.id === tx.catId ? "selected" : null }, c.name));
           });
+          var rowSub = el("select", { class: "row-edit", onchange: function (e) {
+            tx.subId = e.target.value || null; save();
+          } });
+          subOptionsFor(rowSub, tx.catId, tx.subId);
+
           return el("tr", {},
             el("td", {}, el("input", {
               class: "row-edit", type: "date", value: tx.date,
               onchange: function (e) { tx.date = e.target.value; save(); fullRender(); }
             })),
-            el("td", {}, catSel),
+            el("td", {}, rowCat),
+            el("td", {}, rowSub),
             el("td", {}, el("input", {
               class: "row-edit", type: "text", value: tx.description,
               onchange: function (e) { tx.description = e.target.value; save(); }
@@ -760,10 +829,16 @@
               class: "row-edit amount", type: "number", step: "0.01", value: tx.amount,
               onchange: function (e) { tx.amount = num(e.target.value); save(); fullRender(); }
             })),
-            el("td", {}, el("button", { class: "icon-btn", title: "Delete", onclick: function () {
-              md.transactions = md.transactions.filter(function (t) { return t.id !== tx.id; });
-              save(); fullRender();
-            } }, "✕"))
+            el("td", {}, el("div", { class: "row-actions" },
+              el("button", { class: "icon-btn", title: "Duplicate", onclick: function () {
+                var copy = { id: uid(), date: tx.date, catId: tx.catId, subId: tx.subId || null, amount: tx.amount, description: tx.description };
+                md.transactions.push(copy); save(); fullRender();
+              } }, "⧉"),
+              el("button", { class: "icon-btn", title: "Delete", onclick: function () {
+                md.transactions = md.transactions.filter(function (t) { return t.id !== tx.id; });
+                save(); fullRender();
+              } }, "✕")
+            ))
           );
         }))
       );
@@ -852,9 +927,10 @@
 
   function renderChart() {
     var md = currentMonthData();
-    var cs = categorySpent(md);
-    var data = OUTFLOW_CATEGORIES
-      .map(function (c) { return { cat: c, val: cs[c] || 0 }; })
+    var cs = catTotals(md);
+    var data = state.categories
+      .filter(function (c) { return !c.income; })
+      .map(function (c) { return { id: c.id, name: c.name, val: cs[c.id] || 0 }; })
       .filter(function (d) { return d.val > 0; });
     var total = data.reduce(function (s, d) { return s + d.val; }, 0);
 
@@ -867,7 +943,7 @@
     var size = 180, r = 82, cx = 90, cy = 90;
     var svg = svgEl("svg", { width: size, height: size, viewBox: "0 0 " + size + " " + size });
     if (data.length === 1) {
-      svg.appendChild(svgEl("circle", { cx: cx, cy: cy, r: r, fill: CATEGORY_COLORS[data[0].cat] || "#888" }));
+      svg.appendChild(svgEl("circle", { cx: cx, cy: cy, r: r, fill: colorForCat(data[0].id) }));
     } else {
       var angle = 0;
       data.forEach(function (d) {
@@ -875,7 +951,7 @@
         angle = a1;
         svg.appendChild(svgEl("path", {
           d: slicePath(cx, cy, r, a0, a1),
-          fill: CATEGORY_COLORS[d.cat] || "#888",
+          fill: colorForCat(d.id),
           stroke: "#ffffff", "stroke-width": 3
         }));
       });
@@ -887,8 +963,8 @@
       data.map(function (d) {
         var pct = Math.round((d.val / total) * 100);
         return el("div", { class: "row" },
-          el("span", { class: "swatch", style: { background: CATEGORY_COLORS[d.cat] || "#888" } }),
-          el("span", { class: "lg-name" }, d.cat),
+          el("span", { class: "swatch", style: { background: colorForCat(d.id) } }),
+          el("span", { class: "lg-name" }, d.name),
           el("span", { class: "lg-val" }, formatMoney(d.val, state.currency) + " · " + pct + "%")
         );
       })
@@ -913,6 +989,74 @@
     return section;
   }
 
+  function countTxWithCat(catId) {
+    var n = 0;
+    Object.keys(state.months).forEach(function (mk) {
+      state.months[mk].transactions.forEach(function (tx) { if (tx.catId === catId) n++; });
+    });
+    return n;
+  }
+  function deleteCategory(catId) {
+    var used = countTxWithCat(catId);
+    var msg = used > 0
+      ? "Delete this category? " + used + " transaction(s) using it will also be deleted."
+      : "Delete this category?";
+    if (!window.confirm(msg)) return;
+    state.categories = state.categories.filter(function (c) { return c.id !== catId; });
+    Object.keys(state.months).forEach(function (mk) {
+      state.months[mk].transactions = state.months[mk].transactions.filter(function (tx) { return tx.catId !== catId; });
+    });
+    save(); fullRender();
+  }
+  function deleteSub(cat, subId) {
+    cat.subs = cat.subs.filter(function (s) { return s.id !== subId; });
+    Object.keys(state.months).forEach(function (mk) {
+      state.months[mk].transactions.forEach(function (tx) { if (tx.subId === subId) tx.subId = null; });
+    });
+    save(); fullRender();
+  }
+
+  function renderManageCategories() {
+    return el("section", { class: "block" },
+      el("h2", {}, "🗂️ Manage categories"),
+      state.categories.map(function (c) {
+        return el("div", { class: "manage-cat" },
+          el("div", { class: "mc-head" },
+            el("input", {
+              class: "mc-name", value: c.name,
+              onchange: function (e) { c.name = e.target.value || "Category"; save(); fullRender(); }
+            }),
+            el("label", { class: "mc-income" },
+              el("input", {
+                type: "checkbox", checked: c.income ? true : null,
+                onchange: function (e) { c.income = e.target.checked; save(); fullRender(); }
+              }),
+              "counts as income"
+            ),
+            el("button", { class: "icon-btn", title: "Delete category", onclick: function () { deleteCategory(c.id); } }, "✕")
+          ),
+          c.subs.map(function (s) {
+            return el("div", { class: "mc-sub" },
+              el("span", { class: "mc-badge" }, "↳"),
+              el("input", {
+                value: s.name,
+                onchange: function (e) { s.name = e.target.value || "Item"; save(); fullRender(); }
+              }),
+              el("button", { class: "icon-btn", title: "Delete sub-category", onclick: function () { deleteSub(c, s.id); } }, "✕")
+            );
+          }),
+          el("button", { class: "add-link", onclick: function () {
+            c.subs.push({ id: uid(), name: "New sub-category" }); save(); fullRender();
+          } }, "+ Add sub-category")
+        );
+      }),
+      el("button", { class: "add-link", style: { marginTop: "8px" }, onclick: function () {
+        state.categories.push({ id: uid(), name: "New category", income: false, subs: [] });
+        save(); fullRender();
+      } }, "+ Add category")
+    );
+  }
+
   /* ---------- full render ---------- */
   function fullRender() {
     ensureMonth(state.currentMonth);
@@ -924,6 +1068,7 @@
     append(root, renderChart());
     append(root, renderCategories());
     append(root, renderTransactions());
+    append(root, renderManageCategories());
     append(root, renderFunds());
     var importInput = el("input", {
       type: "file", accept: "application/json,.json", style: { display: "none" },
