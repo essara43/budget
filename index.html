@@ -347,6 +347,58 @@
     font-size: 12px;
     white-space: nowrap;
   }
+
+  /* header action buttons */
+  .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .hbtn {
+    background: var(--bg-elev);
+    border: 2px solid var(--border);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 7px 14px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+  }
+  .hbtn:hover { background: var(--accent-dim); }
+
+  /* modal */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(109, 66, 87, 0.32);
+    -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 24px 16px; z-index: 1000; overflow-y: auto;
+  }
+  .modal-panel {
+    background: var(--bg);
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 20px 50px rgba(255, 133, 179, 0.35);
+    width: 100%; max-width: 560px; margin: auto;
+    display: flex; flex-direction: column; max-height: 90vh;
+  }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+  .modal-head h3 { margin: 0; font-size: 17px; color: var(--accent); font-weight: 800; }
+  .modal-close { background: var(--bg-elev-2); border: 2px solid var(--border); color: var(--text); border-radius: 999px; width: 32px; height: 32px; cursor: pointer; font-size: 15px; }
+  .modal-close:hover { border-color: var(--accent); }
+  .modal-body { padding: 16px 18px; overflow-y: auto; }
+  .modal-foot { padding: 12px 18px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
+  .modal-intro { font-size: 12px; color: var(--text-dim); margin-bottom: 14px; }
+
+  .rec-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .rec-form .full { grid-column: 1 / -1; }
+  .rec-row { border: 2px solid var(--border); border-radius: 12px; padding: 10px; margin-bottom: 8px; background: var(--bg-elev); }
+  .rec-row .rr-top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .rec-row .rr-top input.rr-name { flex: 1; min-width: 0; font-weight: 700; }
+  .rec-row .rr-grid { display: grid; grid-template-columns: 1fr 1fr 90px 70px; gap: 6px; align-items: center; }
+  .rec-row .rr-active { font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .rec-marker { color: var(--accent); font-size: 13px; }
+  @media (max-width: 560px) {
+    .rec-form { grid-template-columns: 1fr; }
+    .rec-row .rr-grid { grid-template-columns: 1fr 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -476,8 +528,8 @@
   }
   function freshData() {
     var today = monthKey(new Date());
-    var d = { currency: "EUR", currentMonth: today, categories: defaultTaxonomy(), months: {}, sinkingFunds: [] };
-    d.months[today] = { transactions: [] };
+    var d = { currency: "EUR", currentMonth: today, categories: defaultTaxonomy(), months: {}, sinkingFunds: [], recurring: [] };
+    d.months[today] = { transactions: [], recurringApplied: {} };
     return d;
   }
   // Normalize a parsed data object (from storage or an imported file), migrating
@@ -522,6 +574,7 @@
       }
       delete m.categories;
       if (!Array.isArray(m.transactions)) m.transactions = [];
+      if (!m.recurringApplied || typeof m.recurringApplied !== "object") m.recurringApplied = {};
       m.transactions = m.transactions.map(function (tx) {
         var t = {
           id: tx.id || uid(),
@@ -529,6 +582,7 @@
           amount: num(tx.amount),
           description: tx.description || ""
         };
+        if (tx.recurringId) t.recurringId = tx.recurringId;
         if (tx.catId) {
           t.catId = tx.catId;
           t.subId = tx.subId || null;
@@ -543,6 +597,20 @@
       d.months[mk] = m;
     });
     d.categories = tax;
+
+    if (!Array.isArray(d.recurring)) d.recurring = [];
+    d.recurring = d.recurring.map(function (r) {
+      return {
+        id: r.id || uid(),
+        name: String(r.name || "Récurrent"),
+        catId: r.catId || (tax[0] && tax[0].id),
+        subId: r.subId || null,
+        amount: num(r.amount),
+        dayOfMonth: Math.min(Math.max(1, num(r.dayOfMonth) || 1), 28),
+        active: r.active !== false,
+        startMonth: r.startMonth || null
+      };
+    });
 
     var keys = Object.keys(d.months);
     if (!d.currentMonth || !d.months[d.currentMonth]) {
@@ -590,6 +658,29 @@
     return state.months[key];
   }
   function currentMonthData() { return ensureMonth(state.currentMonth); }
+
+  // Materialize active recurring templates into a month (once each).
+  function applyRecurring(mk) {
+    var recs = state.recurring || [];
+    if (!recs.length) return;
+    var md = ensureMonth(mk);
+    if (!md.recurringApplied) md.recurringApplied = {};
+    var changed = false;
+    recs.forEach(function (r) {
+      if (!r.active) return;
+      if (r.startMonth && mk < r.startMonth) return;
+      if (md.recurringApplied[r.id]) return;
+      var day = Math.min(Math.max(1, num(r.dayOfMonth) || 1), 28);
+      md.transactions.push({
+        id: uid(), date: mk + "-" + String(day).padStart(2, "0"),
+        catId: r.catId, subId: r.subId || null, amount: num(r.amount),
+        description: r.name || "", recurringId: r.id
+      });
+      md.recurringApplied[r.id] = true;
+      changed = true;
+    });
+    if (changed) save();
+  }
 
   function monthActuals(md) {
     var spent = 0, actualIncome = 0;
@@ -692,10 +783,14 @@
         el("div", { class: "month-label" }, monthLabel(state.currentMonth)),
         el("button", { class: "nav", onclick: function () { state.currentMonth = shiftMonth(state.currentMonth, 1); save(); fullRender(); } }, "›")
       ),
-      el("select", { onchange: function (e) { state.currency = e.target.value; save(); fullRender(); } },
-        CURRENCIES.map(function (c) {
-          return el("option", { value: c.code, selected: c.code === state.currency ? "selected" : null }, c.code + " (" + c.symbol + ")");
-        })
+      el("div", { class: "header-actions" },
+        el("button", { class: "hbtn", onclick: function () { openModal("🗂️ Gérer les catégories", renderCategoriesModal); } }, "Catégories"),
+        el("button", { class: "hbtn", onclick: function () { openModal("🔁 Transactions récurrentes", renderRecurringModal); } }, "Récurrents"),
+        el("select", { onchange: function (e) { state.currency = e.target.value; save(); fullRender(); } },
+          CURRENCIES.map(function (c) {
+            return el("option", { value: c.code, selected: c.code === state.currency ? "selected" : null }, c.code + " (" + c.symbol + ")");
+          })
+        )
       )
     );
   }
@@ -830,6 +925,7 @@
               onchange: function (e) { tx.amount = num(e.target.value); save(); fullRender(); }
             })),
             el("td", {}, el("div", { class: "row-actions" },
+              tx.recurringId ? el("span", { class: "rec-marker", title: "Transaction récurrente" }, "🔁") : null,
               el("button", { class: "icon-btn", title: "Duplicate", onclick: function () {
                 var copy = { id: uid(), date: tx.date, catId: tx.catId, subId: tx.subId || null, amount: tx.amount, description: tx.description };
                 md.transactions.push(copy); save(); fullRender();
@@ -996,16 +1092,27 @@
     });
     return n;
   }
+  function ensureOther(deletingId) {
+    var other = state.categories.filter(function (c) { return c.name === "Autre" && c.id !== deletingId; })[0];
+    if (!other) { other = { id: uid(), name: "Autre", income: false, subs: [] }; state.categories.push(other); }
+    return other;
+  }
   function deleteCategory(catId) {
     var used = countTxWithCat(catId);
     var msg = used > 0
-      ? "Delete this category? " + used + " transaction(s) using it will also be deleted."
-      : "Delete this category?";
+      ? "Supprimer cette catégorie ? Ses " + used + " transaction(s) seront déplacées dans « Autre »."
+      : "Supprimer cette catégorie ?";
     if (!window.confirm(msg)) return;
-    state.categories = state.categories.filter(function (c) { return c.id !== catId; });
+    var other = ensureOther(catId);
     Object.keys(state.months).forEach(function (mk) {
-      state.months[mk].transactions = state.months[mk].transactions.filter(function (tx) { return tx.catId !== catId; });
+      state.months[mk].transactions.forEach(function (tx) {
+        if (tx.catId === catId) { tx.catId = other.id; tx.subId = null; }
+      });
     });
+    (state.recurring || []).forEach(function (r) {
+      if (r.catId === catId) { r.catId = other.id; r.subId = null; }
+    });
+    state.categories = state.categories.filter(function (c) { return c.id !== catId; });
     save(); fullRender();
   }
   function deleteSub(cat, subId) {
@@ -1013,53 +1120,144 @@
     Object.keys(state.months).forEach(function (mk) {
       state.months[mk].transactions.forEach(function (tx) { if (tx.subId === subId) tx.subId = null; });
     });
+    (state.recurring || []).forEach(function (r) { if (r.subId === subId) r.subId = null; });
     save(); fullRender();
   }
 
-  function renderManageCategories() {
-    return el("section", { class: "block" },
-      el("h2", {}, "🗂️ Manage categories"),
+  /* ---------- modal layer ---------- */
+  var activeModal = null; // { title, render: function()->node }
+  function openModal(title, renderFn) { activeModal = { title: title, render: renderFn }; renderModalLayer(); }
+  function closeModal() { activeModal = null; renderModalLayer(); }
+  function renderModalLayer() {
+    var existing = document.getElementById("modal-layer");
+    if (existing) existing.remove();
+    if (!activeModal) return;
+    var overlay = el("div", { id: "modal-layer", class: "modal-overlay", onclick: function (e) { if (e.target === overlay) closeModal(); } });
+    var panel = el("div", { class: "modal-panel" },
+      el("div", { class: "modal-head" },
+        el("h3", {}, activeModal.title),
+        el("button", { class: "modal-close", title: "Fermer", onclick: closeModal }, "✕")
+      ),
+      el("div", { class: "modal-body" }, activeModal.render()),
+      el("div", { class: "modal-foot" }, el("button", { class: "footer-btn", onclick: closeModal }, "Fermer"))
+    );
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+  }
+
+  function renderCategoriesModal() {
+    return el("div", {},
+      el("div", { class: "modal-intro" }, "À la suppression d'une catégorie, ses transactions sont replacées dans « Autre »."),
       state.categories.map(function (c) {
         return el("div", { class: "manage-cat" },
           el("div", { class: "mc-head" },
             el("input", {
               class: "mc-name", value: c.name,
-              onchange: function (e) { c.name = e.target.value || "Category"; save(); fullRender(); }
+              onchange: function (e) { c.name = e.target.value || "Catégorie"; save(); fullRender(); }
             }),
             el("label", { class: "mc-income" },
               el("input", {
                 type: "checkbox", checked: c.income ? true : null,
                 onchange: function (e) { c.income = e.target.checked; save(); fullRender(); }
               }),
-              "counts as income"
+              "revenu"
             ),
-            el("button", { class: "icon-btn", title: "Delete category", onclick: function () { deleteCategory(c.id); } }, "✕")
+            el("button", { class: "icon-btn", title: "Supprimer la catégorie", onclick: function () { deleteCategory(c.id); } }, "✕")
           ),
           c.subs.map(function (s) {
             return el("div", { class: "mc-sub" },
               el("span", { class: "mc-badge" }, "↳"),
               el("input", {
                 value: s.name,
-                onchange: function (e) { s.name = e.target.value || "Item"; save(); fullRender(); }
+                onchange: function (e) { s.name = e.target.value || "Élément"; save(); fullRender(); }
               }),
-              el("button", { class: "icon-btn", title: "Delete sub-category", onclick: function () { deleteSub(c, s.id); } }, "✕")
+              el("button", { class: "icon-btn", title: "Supprimer la sous-catégorie", onclick: function () { deleteSub(c, s.id); } }, "✕")
             );
           }),
           el("button", { class: "add-link", onclick: function () {
-            c.subs.push({ id: uid(), name: "New sub-category" }); save(); fullRender();
-          } }, "+ Add sub-category")
+            c.subs.push({ id: uid(), name: "Nouvelle sous-catégorie" }); save(); fullRender();
+          } }, "+ Ajouter une sous-catégorie")
         );
       }),
       el("button", { class: "add-link", style: { marginTop: "8px" }, onclick: function () {
-        state.categories.push({ id: uid(), name: "New category", income: false, subs: [] });
+        state.categories.push({ id: uid(), name: "Nouvelle catégorie", income: false, subs: [] });
         save(); fullRender();
-      } }, "+ Add category")
+      } }, "+ Ajouter une catégorie")
+    );
+  }
+
+  function renderRecurringModal() {
+    var nameInput = el("input", { class: "full rr-name", type: "text", placeholder: "Nom (ex : Loyer, Assurance…)" });
+    var catSelect = el("select", {});
+    state.categories.forEach(function (c) { catSelect.appendChild(el("option", { value: c.id }, c.name)); });
+    var subSelect = el("select", {});
+    function fillSubs() { subOptionsFor(subSelect, catSelect.value, ""); }
+    catSelect.addEventListener("change", fillSubs);
+    fillSubs();
+    var amountInput = el("input", { type: "number", step: "0.01", placeholder: "Montant" });
+    var dayInput = el("input", { type: "number", min: "1", max: "28", placeholder: "Jour", value: "1" });
+
+    var form = el("form", { class: "rec-form", onsubmit: function (e) {
+      e.preventDefault();
+      if (!nameInput.value || amountInput.value === "" || !catSelect.value) return;
+      state.recurring.push({
+        id: uid(), name: nameInput.value, catId: catSelect.value, subId: subSelect.value || null,
+        amount: num(amountInput.value), dayOfMonth: Math.min(Math.max(1, num(dayInput.value) || 1), 28),
+        active: true, startMonth: state.currentMonth
+      });
+      save(); fullRender();
+    } },
+      nameInput, catSelect, subSelect, amountInput, dayInput,
+      el("button", { class: "btn-primary full", type: "submit" }, "+ Ajouter une récurrence")
+    );
+
+    var list;
+    if (!state.recurring.length) {
+      list = el("div", { class: "empty-note" }, "Aucune transaction récurrente pour l'instant.");
+    } else {
+      list = el("div", {}, state.recurring.map(function (r) {
+        var rCat = el("select", { class: "row-edit", onchange: function (e) { r.catId = e.target.value; r.subId = null; save(); fullRender(); } });
+        state.categories.forEach(function (c) { rCat.appendChild(el("option", { value: c.id, selected: c.id === r.catId ? "selected" : null }, c.name)); });
+        var rSub = el("select", { class: "row-edit", onchange: function (e) { r.subId = e.target.value || null; save(); } });
+        subOptionsFor(rSub, r.catId, r.subId);
+        return el("div", { class: "rec-row" },
+          el("div", { class: "rr-top" },
+            el("input", {
+              class: "rr-name", value: r.name,
+              onchange: function (e) { r.name = e.target.value || "Récurrent"; save(); fullRender(); }
+            }),
+            el("label", { class: "rr-active" },
+              el("input", { type: "checkbox", checked: r.active ? true : null, onchange: function (e) { r.active = e.target.checked; save(); fullRender(); } }),
+              "actif"
+            ),
+            el("button", { class: "icon-btn", title: "Supprimer", onclick: function () {
+              if (!window.confirm("Supprimer cette récurrence ? Les transactions déjà créées sont conservées.")) return;
+              state.recurring = state.recurring.filter(function (x) { return x.id !== r.id; });
+              save(); fullRender();
+            } }, "✕")
+          ),
+          el("div", { class: "rr-grid" },
+            rCat, rSub,
+            el("input", { class: "row-edit amount", type: "number", step: "0.01", value: r.amount, title: "Montant",
+              onchange: function (e) { r.amount = num(e.target.value); save(); } }),
+            el("input", { class: "row-edit", type: "number", min: "1", max: "28", value: r.dayOfMonth, title: "Jour du mois",
+              onchange: function (e) { r.dayOfMonth = Math.min(Math.max(1, num(e.target.value) || 1), 28); save(); } })
+          )
+        );
+      }));
+    }
+
+    return el("div", {},
+      el("div", { class: "modal-intro" }, "Les transactions récurrentes (loyer, factures, assurances…) sont ajoutées automatiquement à chaque mois, à partir du mois où elles sont créées."),
+      form,
+      list
     );
   }
 
   /* ---------- full render ---------- */
   function fullRender() {
     ensureMonth(state.currentMonth);
+    applyRecurring(state.currentMonth);
     var root = document.getElementById("root");
     root.innerHTML = "";
     append(root, renderHeader());
@@ -1068,7 +1266,6 @@
     append(root, renderChart());
     append(root, renderCategories());
     append(root, renderTransactions());
-    append(root, renderManageCategories());
     append(root, renderFunds());
     var importInput = el("input", {
       type: "file", accept: "application/json,.json", style: { display: "none" },
@@ -1117,6 +1314,7 @@
       importInput
     ));
     updateComputed();
+    renderModalLayer();
   }
 
   /* ---------- PWA ---------- */
