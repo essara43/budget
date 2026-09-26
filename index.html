@@ -667,21 +667,137 @@
     if (!d) return freshData();
     return migrateLoaded(d);
   }
-  function exportData() {
+  function downloadFile(content, filename, mime) {
     try {
-      var json = JSON.stringify(state, null, 2);
-      var blob = new Blob([json], { type: "application/json" });
+      var blob = new Blob([content], { type: mime });
       var url = URL.createObjectURL(blob);
       var a = document.createElement("a");
-      a.href = url;
-      a.download = "budget-planner-" + monthKey(new Date()) + ".json";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    } catch (e) {
-      window.alert("Export failed: " + e.message);
+    } catch (e) { window.alert("Export failed: " + e.message); }
+  }
+  function exportData() {
+    downloadFile(JSON.stringify(state, null, 2), "budget-planner-" + monthKey(new Date()) + ".json", "application/json");
+  }
+
+  /* ---------- CSV (Excel-compatible) ---------- */
+  function normText(s) { return String(s || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, ""); }
+  function csvEscape(v, delim) {
+    v = String(v == null ? "" : v);
+    if (v.indexOf('"') > -1 || v.indexOf(delim) > -1 || v.indexOf("\n") > -1 || v.indexOf("\r") > -1) {
+      return '"' + v.replace(/"/g, '""') + '"';
     }
+    return v;
+  }
+  function parseCSVLine(line, delim) {
+    var out = [], cur = "", inQ = false;
+    for (var i = 0; i < line.length; i++) {
+      var ch = line[i];
+      if (inQ) {
+        if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+        else cur += ch;
+      } else {
+        if (ch === '"') inQ = true;
+        else if (ch === delim) { out.push(cur); cur = ""; }
+        else cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  }
+  function normalizeDate(s) {
+    s = String(s || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/); if (m) return m[3] + "-" + m[2] + "-" + m[1];
+    var m2 = s.match(/^(\d{4})\/(\d{2})\/(\d{2})$/); if (m2) return m2[1] + "-" + m2[2] + "-" + m2[3];
+    return null;
+  }
+  function parseAmount(str, delim) {
+    str = String(str || "").replace(/\s/g, "").replace(/[€$£]/g, "");
+    if (delim === ";") { str = str.replace(/\./g, "").replace(",", "."); }
+    else if (str.indexOf(",") > -1 && str.indexOf(".") === -1) { str = str.replace(",", "."); }
+    var n = parseFloat(str); return isNaN(n) ? 0 : n;
+  }
+  function exportCSV() {
+    var delim = ";";
+    var acctName = {}; (state.accounts || []).forEach(function (a) { acctName[a.id] = a.name; });
+    var rows = [["Mois", "Date", "Compte", "Catégorie", "Sous-catégorie", "Description", "Montant"]];
+    Object.keys(state.months).sort().forEach(function (mk) {
+      state.months[mk].transactions.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; }).forEach(function (tx) {
+        var c = catById(tx.catId); var sub = subById(c, tx.subId);
+        rows.push([mk, tx.date, acctName[tx.accountId] || "", c ? c.name : "", sub ? sub.name : "", tx.description || "", num(tx.amount).toFixed(2).replace(".", ",")]);
+      });
+    });
+    var csv = rows.map(function (r) { return r.map(function (v) { return csvEscape(v, delim); }).join(delim); }).join("\r\n");
+    downloadFile("﻿" + csv, "budget-planner-" + monthKey(new Date()) + ".csv", "text/csv;charset=utf-8");
+  }
+  function findOrCreateAccountByName(name) {
+    name = String(name || "").trim() || "Compte";
+    var a = state.accounts.filter(function (x) { return x.name.toLowerCase() === name.toLowerCase(); })[0];
+    if (!a) { a = { id: uid(), name: name }; state.accounts.push(a); }
+    return a;
+  }
+  function findOrCreateCatByName(name) {
+    name = String(name || "").trim() || "Autre";
+    var c = state.categories.filter(function (x) { return x.name.toLowerCase() === name.toLowerCase(); })[0];
+    if (!c) { c = { id: uid(), name: name, income: false, subs: [] }; state.categories.push(c); }
+    return c;
+  }
+  function findOrCreateSubByName(cat, name) {
+    name = String(name || "").trim();
+    if (!name) return null;
+    var s = cat.subs.filter(function (x) { return x.name.toLowerCase() === name.toLowerCase(); })[0];
+    if (!s) { s = { id: uid(), name: name }; cat.subs.push(s); }
+    return s;
+  }
+  function importCSVText(text) {
+    text = String(text || "").replace(/^﻿/, "");
+    var lines = text.split(/\r\n|\n|\r/).filter(function (l) { return l.length > 0; });
+    if (!lines.length) { window.alert("Fichier vide."); return; }
+    var delim = (lines[0].split(";").length > lines[0].split(",").length) ? ";" : ",";
+    var header = parseCSVLine(lines[0], delim).map(normText);
+    function col(aliases) { for (var i = 0; i < header.length; i++) { if (aliases.indexOf(header[i]) > -1) return i; } return -1; }
+    var iDate = col(["date"]),
+        iAcc = col(["compte", "account"]),
+        iCat = col(["categorie", "category"]),
+        iSub = col(["sous-categorie", "sous categorie", "souscategorie", "sub-category", "subcategory", "sub category"]),
+        iDesc = col(["description", "desc", "libelle", "note", "notes"]),
+        iAmt = col(["montant", "amount", "valeur", "value"]),
+        iMonth = col(["mois", "month"]);
+    if (iDate < 0 && iMonth < 0) { window.alert("Colonne « Date » introuvable dans le fichier."); return; }
+    if (iAmt < 0) { window.alert("Colonne « Montant » introuvable dans le fichier."); return; }
+    var parsed = [];
+    for (var r = 1; r < lines.length; r++) {
+      var cells = parseCSVLine(lines[r], delim);
+      if (cells.every(function (c) { return !String(c).trim(); })) continue;
+      var dateStr = iDate >= 0 ? normalizeDate(cells[iDate]) : null;
+      var mk = dateStr ? dateStr.slice(0, 7) : (iMonth >= 0 ? String(cells[iMonth]).trim().slice(0, 7) : null);
+      if (!mk || !/^\d{4}-\d{2}$/.test(mk)) continue;
+      if (!dateStr) dateStr = mk + "-01";
+      parsed.push({
+        mk: mk, date: dateStr,
+        account: iAcc >= 0 ? cells[iAcc] : "",
+        category: iCat >= 0 ? cells[iCat] : "Autre",
+        sub: iSub >= 0 ? cells[iSub] : "",
+        desc: iDesc >= 0 ? cells[iDesc] : "",
+        amount: parseAmount(cells[iAmt], delim)
+      });
+    }
+    if (!parsed.length) { window.alert("Aucune transaction valide trouvée dans le fichier."); return; }
+    if (!window.confirm("Importer " + parsed.length + " transaction(s) depuis ce fichier ? Elles seront AJOUTÉES aux données actuelles.")) return;
+    parsed.forEach(function (p) {
+      var acc = String(p.account).trim() ? findOrCreateAccountByName(p.account) : { id: defaultAccountId() };
+      var cat = findOrCreateCatByName(p.category);
+      var sub = findOrCreateSubByName(cat, p.sub);
+      var md = ensureMonth(p.mk);
+      md.transactions.push({
+        id: uid(), date: p.date, catId: cat.id, subId: sub ? sub.id : null,
+        accountId: acc.id || defaultAccountId(), amount: p.amount, description: p.desc
+      });
+    });
+    save(); fullRender();
+    window.alert(parsed.length + " transaction(s) importée(s).");
   }
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
@@ -1445,11 +1561,25 @@
       }
     });
 
+    var csvInput = el("input", {
+      type: "file", accept: ".csv,text/csv", style: { display: "none" },
+      onchange: function (e) {
+        var file = e.target.files && e.target.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function () { importCSVText(reader.result); };
+        reader.readAsText(file);
+        e.target.value = "";
+      }
+    });
+
     append(root, el("footer", { class: "app-footer" },
       el("div", {}, "All data is stored locally on this device. No account, no servers."),
       el("div", { class: "footer-actions" },
-        el("button", { class: "footer-btn", onclick: exportData }, "⬇ Export data"),
-        el("button", { class: "footer-btn", onclick: function () { importInput.click(); } }, "⬆ Import data"),
+        el("button", { class: "footer-btn", onclick: exportData }, "⬇ Export JSON"),
+        el("button", { class: "footer-btn", onclick: function () { importInput.click(); } }, "⬆ Import JSON"),
+        el("button", { class: "footer-btn", onclick: exportCSV }, "⬇ Export Excel (.csv)"),
+        el("button", { class: "footer-btn", onclick: function () { csvInput.click(); } }, "⬆ Import Excel (.csv)"),
         el("button", {
           class: "reset-btn",
           onclick: function () {
@@ -1461,7 +1591,7 @@
           }
         }, "Reset all data")
       ),
-      importInput
+      importInput, csvInput
     ));
     updateComputed();
     renderModalLayer();
