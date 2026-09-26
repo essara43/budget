@@ -210,7 +210,7 @@
   td.tx-check input { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
   .tx-form {
     display: grid;
-    grid-template-columns: 120px 130px 130px 100px 1fr auto;
+    grid-template-columns: 110px 120px 120px 120px 90px minmax(120px, 1fr) auto;
     gap: 8px;
     margin-bottom: 16px;
     align-items: center;
@@ -415,7 +415,7 @@
   .rec-row { border: 2px solid var(--border); border-radius: 12px; padding: 10px; margin-bottom: 8px; background: var(--bg-elev); }
   .rec-row .rr-top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
   .rec-row .rr-top input.rr-name { flex: 1; min-width: 0; font-weight: 700; }
-  .rec-row .rr-grid { display: grid; grid-template-columns: 1fr 1fr 90px 70px; gap: 6px; align-items: center; }
+  .rec-row .rr-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 80px 64px; gap: 6px; align-items: center; }
   .rec-row .rr-active { font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 4px; cursor: pointer; }
   .rec-marker { color: var(--accent); font-size: 13px; }
   @media (max-width: 560px) {
@@ -462,6 +462,8 @@
       " A" + r + "," + r + " 0 " + large + " 1 " + x1 + "," + y1 + " Z";
   }
   function catById(id) { return state.categories.filter(function (c) { return c.id === id; })[0]; }
+  function accountById(id) { return (state.accounts || []).filter(function (a) { return a.id === id; })[0]; }
+  function defaultAccountId() { return (state.accounts && state.accounts[0]) ? state.accounts[0].id : null; }
   function subById(cat, id) { if (!cat || !id) return null; return cat.subs.filter(function (s) { return s.id === id; })[0]; }
   function isIncomeTx(tx) { var c = catById(tx.catId); return c ? !!c.income : false; }
   // Total per category id (works for income & outflow), from a month's transactions.
@@ -551,7 +553,7 @@
   }
   function freshData() {
     var today = monthKey(new Date());
-    var d = { currency: "EUR", theme: "soft", currentMonth: today, categories: defaultTaxonomy(), months: {}, sinkingFunds: [], recurring: [] };
+    var d = { currency: "EUR", theme: "soft", currentMonth: today, categories: defaultTaxonomy(), accounts: [{ id: "acc_main", name: "Compte principal" }], months: {}, sinkingFunds: [], recurring: [] };
     d.months[today] = { transactions: [], recurringApplied: {} };
     return d;
   }
@@ -562,6 +564,9 @@
     d.currency = d.currency || "EUR";
     d.theme = (d.theme === "night") ? "night" : "soft";
     if (!Array.isArray(d.sinkingFunds)) d.sinkingFunds = [];
+    if (!Array.isArray(d.accounts) || !d.accounts.length) d.accounts = [{ id: "acc_main", name: "Compte principal" }];
+    d.accounts = d.accounts.map(function (a) { return { id: a.id || uid(), name: String(a.name || "Compte") }; });
+    var defAcc = d.accounts[0].id;
     if (!d.months || typeof d.months !== "object") d.months = {};
 
     var tax;
@@ -604,7 +609,8 @@
           id: tx.id || uid(),
           date: tx.date || (mk + "-01"),
           amount: num(tx.amount),
-          description: tx.description || ""
+          description: tx.description || "",
+          accountId: tx.accountId || defAcc
         };
         if (tx.recurringId) t.recurringId = tx.recurringId;
         if (tx.catId) {
@@ -632,7 +638,8 @@
         amount: num(r.amount),
         dayOfMonth: Math.min(Math.max(1, num(r.dayOfMonth) || 1), 28),
         active: r.active !== false,
-        startMonth: r.startMonth || null
+        startMonth: r.startMonth || null,
+        accountId: r.accountId || defAcc
       };
     });
 
@@ -673,6 +680,7 @@
   }
 
   var state = loadData();
+  save(); // persist any migration to the current data shape
 
   function ensureMonth(key) {
     if (!state.months[key]) {
@@ -698,7 +706,7 @@
       md.transactions.push({
         id: uid(), date: mk + "-" + String(day).padStart(2, "0"),
         catId: r.catId, subId: r.subId || null, amount: num(r.amount),
-        description: r.name || "", recurringId: r.id
+        description: r.name || "", accountId: r.accountId || defaultAccountId(), recurringId: r.id
       });
       md.recurringApplied[r.id] = true;
       changed = true;
@@ -811,6 +819,7 @@
         el("button", { class: "hbtn", title: "Thème jour / nuit", onclick: function () {
           state.theme = (state.theme === "night") ? "soft" : "night"; save(); fullRender();
         } }, state.theme === "night" ? "☀️" : "🌙"),
+        el("button", { class: "hbtn", onclick: function () { openModal("💳 Comptes", renderAccountsModal); } }, "Comptes"),
         el("button", { class: "hbtn", onclick: function () { openModal("🗂️ Gérer les catégories", renderCategoriesModal); } }, "Catégories"),
         el("button", { class: "hbtn", onclick: function () { openModal("🔁 Transactions récurrentes", renderRecurringModal); } }, "Récurrents"),
         el("select", { onchange: function (e) { state.currency = e.target.value; save(); fullRender(); } },
@@ -902,6 +911,8 @@
     catSelect.addEventListener("change", fillFormSubs);
     fillFormSubs();
 
+    var acctSelect = el("select", {});
+    state.accounts.forEach(function (a) { acctSelect.appendChild(el("option", { value: a.id }, a.name)); });
     var amountInput = el("input", { type: "number", step: "0.01", placeholder: "Amount", required: "required" });
     var descInput = el("input", { type: "text", placeholder: "Description" });
 
@@ -910,11 +921,12 @@
       if (amountInput.value === "" || !catSelect.value) return;
       md.transactions.push({
         id: uid(), date: dateInput.value, catId: catSelect.value,
-        subId: subSelect.value || null, amount: num(amountInput.value), description: descInput.value
+        subId: subSelect.value || null, accountId: acctSelect.value || defaultAccountId(),
+        amount: num(amountInput.value), description: descInput.value
       });
       save(); fullRender();
     } },
-      dateInput, catSelect, subSelect, amountInput, descInput,
+      dateInput, catSelect, subSelect, acctSelect, amountInput, descInput,
       el("button", { class: "btn-primary", type: "submit" }, "Add")
     );
 
@@ -926,7 +938,7 @@
       tableArea = el("table", {},
         el("thead", {}, el("tr", {},
           el("th", {}, "Date"), el("th", {}, "Category"), el("th", {}, "Sub-category"),
-          el("th", {}, "Description"), el("th", { style: { textAlign: "right" } }, "Amount"),
+          el("th", {}, "Compte"), el("th", {}, "Description"), el("th", { style: { textAlign: "right" } }, "Amount"),
           el("th", { class: "tx-check", title: "Récurrent" }, "🔁"), el("th", {})
         )),
         el("tbody", {}, sorted.map(function (tx) {
@@ -940,6 +952,10 @@
             tx.subId = e.target.value || null; save();
           } });
           subOptionsFor(rowSub, tx.catId, tx.subId);
+          var rowAcct = el("select", { class: "row-edit", onchange: function (e) { tx.accountId = e.target.value; save(); } });
+          state.accounts.forEach(function (a) {
+            rowAcct.appendChild(el("option", { value: a.id, selected: a.id === tx.accountId ? "selected" : null }, a.name));
+          });
 
           var isRec = !!(tx.recurringId && (state.recurring || []).some(function (r) { return r.id === tx.recurringId; }));
           var recChk = el("input", {
@@ -949,8 +965,9 @@
                 var c = catById(tx.catId);
                 var rec = {
                   id: uid(), name: tx.description || (c ? c.name : "Récurrent"),
-                  catId: tx.catId, subId: tx.subId || null, amount: num(tx.amount),
-                  dayOfMonth: dayFromDate(tx.date), active: true, startMonth: (tx.date || state.currentMonth).slice(0, 7)
+                  catId: tx.catId, subId: tx.subId || null, accountId: tx.accountId || defaultAccountId(),
+                  amount: num(tx.amount), dayOfMonth: dayFromDate(tx.date), active: true,
+                  startMonth: (tx.date || state.currentMonth).slice(0, 7)
                 };
                 state.recurring.push(rec);
                 tx.recurringId = rec.id;
@@ -973,6 +990,7 @@
             })),
             el("td", {}, rowCat),
             el("td", {}, rowSub),
+            el("td", {}, rowAcct),
             el("td", {}, el("input", {
               class: "row-edit tx-desc", type: "text", value: tx.description,
               onchange: function (e) { tx.description = e.target.value; save(); }
@@ -984,7 +1002,7 @@
             el("td", { class: "tx-check" }, recChk),
             el("td", {}, el("div", { class: "row-actions" },
               el("button", { class: "icon-btn", title: "Duplicate", onclick: function () {
-                var copy = { id: uid(), date: tx.date, catId: tx.catId, subId: tx.subId || null, amount: tx.amount, description: tx.description };
+                var copy = { id: uid(), date: tx.date, catId: tx.catId, subId: tx.subId || null, accountId: tx.accountId || defaultAccountId(), amount: tx.amount, description: tx.description };
                 md.transactions.push(copy); save(); fullRender();
               } }, "⧉"),
               el("button", { class: "icon-btn", title: "Delete", onclick: function () {
@@ -1244,6 +1262,48 @@
     );
   }
 
+  function countTxWithAccount(accId) {
+    var n = 0;
+    Object.keys(state.months).forEach(function (mk) {
+      state.months[mk].transactions.forEach(function (tx) { if (tx.accountId === accId) n++; });
+    });
+    return n;
+  }
+  function deleteAccount(accId) {
+    if (state.accounts.length <= 1) { window.alert("Il faut garder au moins un compte."); return; }
+    var target = state.accounts.filter(function (a) { return a.id !== accId; })[0];
+    var used = countTxWithAccount(accId);
+    var msg = used > 0
+      ? "Supprimer ce compte ? Ses " + used + " transaction(s) seront déplacées vers « " + target.name + " »."
+      : "Supprimer ce compte ?";
+    if (!window.confirm(msg)) return;
+    Object.keys(state.months).forEach(function (mk) {
+      state.months[mk].transactions.forEach(function (tx) { if (tx.accountId === accId) tx.accountId = target.id; });
+    });
+    (state.recurring || []).forEach(function (r) { if (r.accountId === accId) r.accountId = target.id; });
+    state.accounts = state.accounts.filter(function (a) { return a.id !== accId; });
+    save(); fullRender();
+  }
+  function renderAccountsModal() {
+    return el("div", {},
+      el("div", { class: "modal-intro" }, "Chaque transaction est rattachée à un compte (ex : tes cartes bancaires). À la suppression, ses transactions sont déplacées vers un autre compte."),
+      state.accounts.map(function (a) {
+        return el("div", { class: "manage-cat" },
+          el("div", { class: "mc-head" },
+            el("input", {
+              class: "mc-name", value: a.name,
+              onchange: function (e) { a.name = e.target.value || "Compte"; save(); fullRender(); }
+            }),
+            el("button", { class: "icon-btn", title: "Supprimer le compte", onclick: function () { deleteAccount(a.id); } }, "✕")
+          )
+        );
+      }),
+      el("button", { class: "add-link", style: { marginTop: "8px" }, onclick: function () {
+        state.accounts.push({ id: uid(), name: "Nouveau compte" }); save(); fullRender();
+      } }, "+ Ajouter un compte")
+    );
+  }
+
   function renderRecurringModal() {
     var nameInput = el("input", { class: "full rr-name", type: "text", placeholder: "Nom (ex : Loyer, Assurance…)" });
     var catSelect = el("select", {});
@@ -1252,6 +1312,8 @@
     function fillSubs() { subOptionsFor(subSelect, catSelect.value, ""); }
     catSelect.addEventListener("change", fillSubs);
     fillSubs();
+    var acctSelect = el("select", {});
+    state.accounts.forEach(function (a) { acctSelect.appendChild(el("option", { value: a.id }, a.name)); });
     var amountInput = el("input", { type: "number", step: "0.01", placeholder: "Montant" });
     var dayInput = el("input", { type: "number", min: "1", max: "28", placeholder: "Jour", value: "1" });
 
@@ -1260,12 +1322,13 @@
       if (!nameInput.value || amountInput.value === "" || !catSelect.value) return;
       state.recurring.push({
         id: uid(), name: nameInput.value, catId: catSelect.value, subId: subSelect.value || null,
+        accountId: acctSelect.value || defaultAccountId(),
         amount: num(amountInput.value), dayOfMonth: Math.min(Math.max(1, num(dayInput.value) || 1), 28),
         active: true, startMonth: state.currentMonth
       });
       save(); fullRender();
     } },
-      nameInput, catSelect, subSelect, amountInput, dayInput,
+      nameInput, catSelect, subSelect, acctSelect, amountInput, dayInput,
       el("button", { class: "btn-primary full", type: "submit" }, "+ Ajouter une récurrence")
     );
 
@@ -1278,6 +1341,8 @@
         state.categories.forEach(function (c) { rCat.appendChild(el("option", { value: c.id, selected: c.id === r.catId ? "selected" : null }, c.name)); });
         var rSub = el("select", { class: "row-edit", onchange: function (e) { r.subId = e.target.value || null; save(); } });
         subOptionsFor(rSub, r.catId, r.subId);
+        var rAcct = el("select", { class: "row-edit", onchange: function (e) { r.accountId = e.target.value; save(); } });
+        state.accounts.forEach(function (a) { rAcct.appendChild(el("option", { value: a.id, selected: a.id === r.accountId ? "selected" : null }, a.name)); });
         return el("div", { class: "rec-row" },
           el("div", { class: "rr-top" },
             el("input", {
@@ -1295,7 +1360,7 @@
             } }, "✕")
           ),
           el("div", { class: "rr-grid" },
-            rCat, rSub,
+            rCat, rSub, rAcct,
             el("input", { class: "row-edit amount", type: "number", step: "0.01", value: r.amount, title: "Montant",
               onchange: function (e) { r.amount = num(e.target.value); save(); } }),
             el("input", { class: "row-edit", type: "number", min: "1", max: "28", value: r.dayOfMonth, title: "Jour du mois",
