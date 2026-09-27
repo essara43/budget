@@ -210,6 +210,12 @@
   .row-edit.tx-desc { width: 170px; }
   td .row-edit[type="date"] { min-width: 120px; }
   th.tx-check, td.tx-check { text-align: center; }
+  tr.filter-row td { padding: 4px 6px 8px; border-bottom: 2px solid var(--border); }
+  tr.filter-row input, tr.filter-row select {
+    width: 100%; font-size: 12px; padding: 4px 6px; border-radius: 6px;
+  }
+  .filter-clear { background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; border-radius: 6px; }
+  .filter-clear:hover { color: var(--accent); background: var(--bg-elev-2); }
   td.tx-check input { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
   .tx-form {
     display: grid;
@@ -450,6 +456,8 @@
   ];
 
   var COLOR_PALETTE = ["#8ecae6", "#ffd166", "#c9a7eb", "#ff9aa2", "#a0e7c8", "#f7a4c8", "#b5e48c", "#ffb4a2", "#a2d2ff", "#ffc6ff"];
+  var tableFilters = { date: "", catId: "all", subName: "all", accountId: "all", desc: "", amount: "" };
+  function resetTableFilters() { tableFilters = { date: "", catId: "all", subName: "all", accountId: "all", desc: "", amount: "" }; }
 
   /* ---------- helpers ---------- */
   function svgEl(tag, attrs) {
@@ -1075,84 +1083,150 @@
     if (sorted.length === 0) {
       tableArea = el("div", { class: "empty-note" }, "No transactions this month yet.");
     } else {
-      tableArea = el("table", {},
-        el("thead", {}, el("tr", {},
-          el("th", {}, "Date"), el("th", {}, "Category"), el("th", {}, "Sub-category"),
-          el("th", {}, "Compte"), el("th", {}, "Description"), el("th", { style: { textAlign: "right" } }, "Amount"),
-          el("th", { class: "tx-check", title: "Récurrent" }, "🔁"), el("th", {})
-        )),
-        el("tbody", {}, sorted.map(function (tx) {
-          var rowCat = el("select", { class: "row-edit", onchange: function (e) {
-            tx.catId = e.target.value; tx.subId = null; save(); fullRender();
-          } });
-          state.categories.forEach(function (c) {
-            rowCat.appendChild(el("option", { value: c.id, selected: c.id === tx.catId ? "selected" : null }, c.name));
-          });
-          var rowSub = el("select", { class: "row-edit", onchange: function (e) {
-            tx.subId = e.target.value || null; save();
-          } });
-          subOptionsFor(rowSub, tx.catId, tx.subId);
-          var rowAcct = el("select", { class: "row-edit", onchange: function (e) { tx.accountId = e.target.value; save(); } });
-          state.accounts.forEach(function (a) {
-            rowAcct.appendChild(el("option", { value: a.id, selected: a.id === tx.accountId ? "selected" : null }, a.name));
-          });
+      var trs = sorted.map(function (tx) {
+        var rowCat = el("select", { class: "row-edit", onchange: function (e) {
+          tx.catId = e.target.value; tx.subId = null; save(); fullRender();
+        } });
+        state.categories.forEach(function (c) {
+          rowCat.appendChild(el("option", { value: c.id, selected: c.id === tx.catId ? "selected" : null }, c.name));
+        });
+        var rowSub = el("select", { class: "row-edit", onchange: function (e) {
+          tx.subId = e.target.value || null; save(); fullRender();
+        } });
+        subOptionsFor(rowSub, tx.catId, tx.subId);
+        var rowAcct = el("select", { class: "row-edit", onchange: function (e) { tx.accountId = e.target.value; save(); fullRender(); } });
+        state.accounts.forEach(function (a) {
+          rowAcct.appendChild(el("option", { value: a.id, selected: a.id === tx.accountId ? "selected" : null }, a.name));
+        });
 
-          var isRec = !!(tx.recurringId && (state.recurring || []).some(function (r) { return r.id === tx.recurringId; }));
-          var recChk = el("input", {
-            type: "checkbox", checked: isRec ? true : null, title: "Rendre cette transaction récurrente",
-            onchange: function (e) {
-              if (e.target.checked) {
-                var c = catById(tx.catId);
-                var rec = {
-                  id: uid(), name: tx.description || (c ? c.name : "Récurrent"),
-                  catId: tx.catId, subId: tx.subId || null, accountId: tx.accountId || defaultAccountId(),
-                  amount: num(tx.amount), dayOfMonth: dayFromDate(tx.date), active: true,
-                  startMonth: (tx.date || state.currentMonth).slice(0, 7)
-                };
-                state.recurring.push(rec);
-                tx.recurringId = rec.id;
-                if (!md.recurringApplied) md.recurringApplied = {};
-                md.recurringApplied[rec.id] = true;
-                save(); fullRender();
-              } else {
-                if (!window.confirm("Arrêter cette récurrence ? La transaction actuelle est conservée.")) { e.target.checked = true; return; }
-                state.recurring = state.recurring.filter(function (r) { return r.id !== tx.recurringId; });
-                tx.recurringId = null;
-                save(); fullRender();
-              }
+        var isRec = !!(tx.recurringId && (state.recurring || []).some(function (r) { return r.id === tx.recurringId; }));
+        var recChk = el("input", {
+          type: "checkbox", checked: isRec ? true : null, title: "Rendre cette transaction récurrente",
+          onchange: function (e) {
+            if (e.target.checked) {
+              var c = catById(tx.catId);
+              var rec = {
+                id: uid(), name: tx.description || (c ? c.name : "Récurrent"),
+                catId: tx.catId, subId: tx.subId || null, accountId: tx.accountId || defaultAccountId(),
+                amount: num(tx.amount), dayOfMonth: dayFromDate(tx.date), active: true,
+                startMonth: (tx.date || state.currentMonth).slice(0, 7)
+              };
+              state.recurring.push(rec);
+              tx.recurringId = rec.id;
+              if (!md.recurringApplied) md.recurringApplied = {};
+              md.recurringApplied[rec.id] = true;
+              save(); fullRender();
+            } else {
+              if (!window.confirm("Arrêter cette récurrence ? La transaction actuelle est conservée.")) { e.target.checked = true; return; }
+              state.recurring = state.recurring.filter(function (r) { return r.id !== tx.recurringId; });
+              tx.recurringId = null;
+              save(); fullRender();
             }
-          });
+          }
+        });
 
-          return el("tr", {},
-            el("td", {}, el("input", {
-              class: "row-edit", type: "date", value: tx.date,
-              onchange: function (e) { tx.date = e.target.value; save(); fullRender(); }
-            })),
-            el("td", {}, rowCat),
-            el("td", {}, rowSub),
-            el("td", {}, rowAcct),
-            el("td", {}, el("input", {
-              class: "row-edit tx-desc", type: "text", value: tx.description,
-              onchange: function (e) { tx.description = e.target.value; save(); }
-            })),
-            el("td", { class: "tx-amount" }, el("input", {
-              class: "row-edit amount", type: "number", step: "0.01", value: tx.amount,
-              onchange: function (e) { tx.amount = num(e.target.value); save(); fullRender(); }
-            })),
-            el("td", { class: "tx-check" }, recChk),
-            el("td", {}, el("div", { class: "row-actions" },
-              el("button", { class: "icon-btn", title: "Duplicate", onclick: function () {
-                var copy = { id: uid(), date: tx.date, catId: tx.catId, subId: tx.subId || null, accountId: tx.accountId || defaultAccountId(), amount: tx.amount, description: tx.description };
-                md.transactions.push(copy); save(); fullRender();
-              } }, "⧉"),
-              el("button", { class: "icon-btn", title: "Delete", onclick: function () {
-                md.transactions = md.transactions.filter(function (t) { return t.id !== tx.id; });
-                save(); fullRender();
-              } }, "✕")
-            ))
-          );
-        }))
+        var cc = catById(tx.catId); var ss = subById(cc, tx.subId);
+        return el("tr", {
+          dataset: {
+            fdate: tx.date || "",
+            fcat: tx.catId || "",
+            fsub: ss ? ss.name.toLowerCase() : "",
+            facct: tx.accountId || "",
+            fdesc: (tx.description || "").toLowerCase(),
+            famt: String(num(tx.amount)).replace(".", ",")
+          }
+        },
+          el("td", {}, el("input", {
+            class: "row-edit", type: "date", value: tx.date,
+            onchange: function (e) { tx.date = e.target.value; save(); fullRender(); }
+          })),
+          el("td", {}, rowCat),
+          el("td", {}, rowSub),
+          el("td", {}, rowAcct),
+          el("td", {}, el("input", {
+            class: "row-edit tx-desc", type: "text", value: tx.description,
+            onchange: function (e) { tx.description = e.target.value; save(); }
+          })),
+          el("td", { class: "tx-amount" }, el("input", {
+            class: "row-edit amount", type: "number", step: "0.01", value: tx.amount,
+            onchange: function (e) { tx.amount = num(e.target.value); save(); fullRender(); }
+          })),
+          el("td", { class: "tx-check" }, recChk),
+          el("td", {}, el("div", { class: "row-actions" },
+            el("button", { class: "icon-btn", title: "Duplicate", onclick: function () {
+              var copy = { id: uid(), date: tx.date, catId: tx.catId, subId: tx.subId || null, accountId: tx.accountId || defaultAccountId(), amount: tx.amount, description: tx.description };
+              md.transactions.push(copy); save(); fullRender();
+            } }, "⧉"),
+            el("button", { class: "icon-btn", title: "Delete", onclick: function () {
+              md.transactions = md.transactions.filter(function (t) { return t.id !== tx.id; });
+              save(); fullRender();
+            } }, "✕")
+          ))
+        );
+      });
+
+      // ----- per-column filter row -----
+      var subNames = {};
+      state.categories.forEach(function (c) { c.subs.forEach(function (s) { subNames[s.name] = true; }); });
+      function mkText(ph, key) {
+        return el("input", { type: "text", placeholder: ph, value: tableFilters[key] || "",
+          oninput: function (e) { tableFilters[key] = e.target.value; applyTableFilters(); } });
+      }
+      var fDate = mkText("aaaa-mm-jj", "date");
+      var fCat = el("select", { onchange: function (e) { tableFilters.catId = e.target.value; applyTableFilters(); } });
+      fCat.appendChild(el("option", { value: "all", selected: tableFilters.catId === "all" ? "selected" : null }, "Toutes"));
+      state.categories.forEach(function (c) { fCat.appendChild(el("option", { value: c.id, selected: c.id === tableFilters.catId ? "selected" : null }, c.name)); });
+      var fSub = el("select", { onchange: function (e) { tableFilters.subName = e.target.value; applyTableFilters(); } });
+      fSub.appendChild(el("option", { value: "all", selected: tableFilters.subName === "all" ? "selected" : null }, "Toutes"));
+      Object.keys(subNames).sort().forEach(function (n) { var lv = n.toLowerCase(); fSub.appendChild(el("option", { value: lv, selected: lv === tableFilters.subName ? "selected" : null }, n)); });
+      var fAcct = el("select", { onchange: function (e) { tableFilters.accountId = e.target.value; applyTableFilters(); } });
+      fAcct.appendChild(el("option", { value: "all", selected: tableFilters.accountId === "all" ? "selected" : null }, "Tous"));
+      state.accounts.forEach(function (a) { fAcct.appendChild(el("option", { value: a.id, selected: a.id === tableFilters.accountId ? "selected" : null }, a.name)); });
+      var fDesc = mkText("rechercher…", "desc");
+      var fAmt = mkText("montant", "amount");
+
+      var emptyRow = el("tr", {}, el("td", { colspan: "8", class: "empty-note", style: { textAlign: "center" } }, "Aucune transaction ne correspond aux filtres."));
+
+      function applyTableFilters() {
+        var fd = (tableFilters.date || "").toLowerCase();
+        var fc = tableFilters.catId || "all";
+        var fs = tableFilters.subName || "all";
+        var fa = tableFilters.accountId || "all";
+        var fx = (tableFilters.desc || "").toLowerCase();
+        var fm = (tableFilters.amount || "").replace(".", ",").toLowerCase();
+        var shown = 0;
+        trs.forEach(function (tr) {
+          var d = tr.dataset, ok = true;
+          if (fd && d.fdate.toLowerCase().indexOf(fd) < 0) ok = false;
+          if (ok && fc !== "all" && d.fcat !== fc) ok = false;
+          if (ok && fs !== "all" && d.fsub !== fs) ok = false;
+          if (ok && fa !== "all" && d.facct !== fa) ok = false;
+          if (ok && fx && d.fdesc.indexOf(fx) < 0) ok = false;
+          if (ok && fm && d.famt.indexOf(fm) < 0) ok = false;
+          tr.style.display = ok ? "" : "none";
+          if (ok) shown++;
+        });
+        emptyRow.style.display = shown === 0 ? "" : "none";
+      }
+
+      var filterRow = el("tr", { class: "filter-row" },
+        el("td", {}, fDate), el("td", {}, fCat), el("td", {}, fSub), el("td", {}, fAcct),
+        el("td", {}, fDesc), el("td", {}, fAmt), el("td", {}),
+        el("td", {}, el("button", { class: "filter-clear", title: "Effacer les filtres", onclick: function () { resetTableFilters(); fullRender(); } }, "✕"))
       );
+
+      tableArea = el("table", {},
+        el("thead", {},
+          el("tr", {},
+            el("th", {}, "Date"), el("th", {}, "Category"), el("th", {}, "Sub-category"),
+            el("th", {}, "Compte"), el("th", {}, "Description"), el("th", { style: { textAlign: "right" } }, "Amount"),
+            el("th", { class: "tx-check", title: "Récurrent" }, "🔁"), el("th", {})
+          ),
+          filterRow
+        ),
+        el("tbody", {}, trs.concat([emptyRow]))
+      );
+      applyTableFilters();
     }
 
     return el("section", { class: "block" },
