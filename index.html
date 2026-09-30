@@ -430,6 +430,12 @@
   .rec-row .rr-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 80px 64px; gap: 6px; align-items: center; }
   .rec-row .rr-active { font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 4px; cursor: pointer; }
   .rec-marker { color: var(--accent); font-size: 13px; }
+  .rec-arrow { color: var(--text-dim); font-size: 12px; align-self: center; }
+  .transfer-row .transfer-label { color: var(--text-dim); font-style: italic; white-space: nowrap; }
+  .transfer-row .transfer-accounts { font-weight: 600; white-space: nowrap; }
+  .transfer-row .transfer-sign { font-weight: 700; }
+  .row-edit.amount.neg { color: var(--red); }
+  .row-edit.amount.pos { color: var(--accent); }
   @media (max-width: 560px) {
     .rec-form { grid-template-columns: 1fr; }
     .rec-row .rr-grid { grid-template-columns: 1fr 1fr; }
@@ -601,7 +607,7 @@
   function freshData() {
     var today = monthKey(new Date());
     var d = { currency: "EUR", theme: "soft", accountFilter: "all", currentMonth: today, categories: defaultTaxonomy(), accounts: [{ id: "acc_main", name: "Compte principal" }], months: {}, sinkingFunds: [], recurring: [] };
-    d.months[today] = { transactions: [], recurringApplied: {} };
+    d.months[today] = { transactions: [], transfers: [], recurringApplied: {} };
     return d;
   }
   // Normalize a parsed data object (from storage or an imported file), migrating
@@ -653,6 +659,10 @@
       delete m.categories;
       if (!Array.isArray(m.transactions)) m.transactions = [];
       if (!m.recurringApplied || typeof m.recurringApplied !== "object") m.recurringApplied = {};
+      if (!Array.isArray(m.transfers)) m.transfers = [];
+      m.transfers = m.transfers.map(function (t) {
+        return { id: t.id || uid(), date: t.date || (mk + "-01"), fromId: t.fromId, toId: t.toId, amount: num(t.amount), description: t.description || "" };
+      });
       m.transactions = m.transactions.map(function (tx) {
         var t = {
           id: tx.id || uid(),
@@ -881,14 +891,35 @@
 
   function txMatchesAccount(tx, acct) { return !acct || acct === "all" || tx.accountId === acct; }
   function monthActuals(md, acct) {
-    var spent = 0, actualIncome = 0;
+    var spent = 0, actualIncome = 0, transferIn = 0, transferOut = 0;
     md.transactions.forEach(function (tx) {
       if (!txMatchesAccount(tx, acct)) return;
       if (isIncomeTx(tx)) actualIncome += num(tx.amount);
       else spent += num(tx.amount);
     });
-    return { spent: spent, actualIncome: actualIncome };
+    // Transfers are internal: they net to zero across "all", but move money between accounts.
+    if (acct && acct !== "all") {
+      (md.transfers || []).forEach(function (t) {
+        if (t.toId === acct) transferIn += num(t.amount);
+        if (t.fromId === acct) transferOut += num(t.amount);
+      });
+    }
+    return { spent: spent, actualIncome: actualIncome, transferNet: transferIn - transferOut };
   }
+  function ensureTransfers(md) { if (!Array.isArray(md.transfers)) md.transfers = []; return md.transfers; }
+  function addTransfer(t) { var mk = (t.date || state.currentMonth).slice(0, 7); ensureTransfers(ensureMonth(mk)).push(t); }
+  function removeTransfer(tr) {
+    Object.keys(state.months).forEach(function (mk) {
+      var md = state.months[mk];
+      if (md.transfers) md.transfers = md.transfers.filter(function (x) { return x.id !== tr.id; });
+    });
+  }
+  function moveTransferToMonth(tr, newDate) {
+    var mk = String(newDate || "").slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(mk)) { tr.date = newDate; return; }
+    removeTransfer(tr); tr.date = newDate; ensureTransfers(ensureMonth(mk)).push(tr);
+  }
+
   // Carryover = the previous (existing) month's "Left to Spend", chained back.
   function carryoverInto(monthKey, acct) {
     var prev = shiftMonth(monthKey, -1);
@@ -899,7 +930,7 @@
     var md = state.months[monthKey];
     if (!md) return 0;
     var a = monthActuals(md, acct);
-    return carryoverInto(monthKey, acct) + a.actualIncome - a.spent;
+    return carryoverInto(monthKey, acct) + a.actualIncome - a.spent + a.transferNet;
   }
   function computeTotals(md, monthKey, acct) {
     var a = monthActuals(md, acct);
@@ -908,8 +939,9 @@
     return {
       income: income,
       spent: a.spent,
-      leftToSpend: income - a.spent,
-      carryover: carry
+      leftToSpend: income - a.spent + a.transferNet,
+      carryover: carry,
+      transferNet: a.transferNet
     };
   }
 
@@ -988,6 +1020,7 @@
           state.theme = (state.theme === "night") ? "soft" : "night"; save(); fullRender();
         } }, state.theme === "night" ? "☀️" : "🌙"),
         el("button", { class: "hbtn", onclick: function () { openModal("💳 Comptes", renderAccountsModal); } }, "Comptes"),
+        el("button", { class: "hbtn", onclick: function () { openModal("⇄ Virements", renderTransfersModal); } }, "Virements"),
         el("button", { class: "hbtn", onclick: function () { openModal("🗂️ Gérer les catégories", renderCategoriesModal); } }, "Catégories"),
         el("button", { class: "hbtn", onclick: function () { openModal("🔁 Transactions récurrentes", renderRecurringModal); } }, "Récurrents"),
         el("select", { onchange: function (e) { state.currency = e.target.value; save(); fullRender(); } },
@@ -1111,12 +1144,34 @@
     );
 
     var acctF = state.accountFilter || "all";
-    var sorted = sortTransactions(md.transactions.filter(function (tx) { return txMatchesAccount(tx, acctF); }));
+    var txItems = md.transactions.filter(function (tx) { return txMatchesAccount(tx, acctF); }).map(function (tx) { return { kind: "tx", tx: tx, date: tx.date || "" }; });
+    var trItems = (md.transfers || []).filter(function (t) { return acctF === "all" || t.fromId === acctF || t.toId === acctF; }).map(function (t) { return { kind: "transfer", t: t, date: t.date || "" }; });
+    var items = txItems.concat(trItems);
+    function itemSortVal(item, key) {
+      if (item.kind === "transfer") {
+        var t = item.t;
+        if (key === "date") return t.date || "";
+        if (key === "amount") return num(t.amount);
+        if (key === "category") return "⇄ virement";
+        if (key === "sub") return "";
+        if (key === "account") { var a = accountById(t.fromId); return a ? a.name.toLowerCase() : ""; }
+        if (key === "description") return (t.description || "").toLowerCase();
+        return "";
+      }
+      return txSortVal(item.tx, key);
+    }
+    items.sort(function (a, b) {
+      var va = itemSortVal(a, tableSort.key), vb = itemSortVal(b, tableSort.key);
+      var cmp = (typeof va === "number") ? (va - vb) : String(va).localeCompare(String(vb));
+      if (cmp === 0) cmp = (a.date < b.date ? 1 : (a.date > b.date ? -1 : 0));
+      return tableSort.dir === "asc" ? cmp : -cmp;
+    });
+
     var tableArea;
-    if (sorted.length === 0) {
+    if (items.length === 0) {
       tableArea = el("div", { class: "empty-note" }, "No transactions this month yet.");
     } else {
-      var trs = sorted.map(function (tx) {
+      function buildTxRow(tx) {
         var rowCat = el("select", { class: "row-edit", onchange: function (e) {
           tx.catId = e.target.value; tx.subId = null; save(); fullRender();
         } });
@@ -1196,7 +1251,39 @@
             } }, "✕")
           ))
         );
-      });
+      }
+
+      function buildTransferRow(t) {
+        var fromA = accountById(t.fromId), toA = accountById(t.toId);
+        var dir = "";
+        if (acctF !== "all") { if (t.fromId === acctF) dir = "out"; else if (t.toId === acctF) dir = "in"; }
+        return el("tr", {
+          class: "transfer-row",
+          dataset: {
+            transfer: "1", fdate: t.date || "", fcat: "__transfer__", fsub: "",
+            facctfrom: t.fromId || "", facctto: t.toId || "",
+            fdesc: (t.description || "").toLowerCase(), famt: String(num(t.amount)).replace(".", ",")
+          }
+        },
+          el("td", {}, el("input", { class: "row-edit", type: "date", value: t.date,
+            onchange: function (e) { moveTransferToMonth(t, e.target.value); save(); fullRender(); } })),
+          el("td", {}, el("span", { class: "transfer-label" }, "⇄ Virement")),
+          el("td", {}, ""),
+          el("td", {}, el("span", { class: "transfer-accounts" }, (fromA ? fromA.name : "?") + " ⟶ " + (toA ? toA.name : "?"))),
+          el("td", {}, el("input", { class: "row-edit tx-desc", type: "text", value: t.description,
+            onchange: function (e) { t.description = e.target.value; save(); } })),
+          el("td", { class: "tx-amount" }, el("input", {
+            class: "row-edit amount" + (dir === "out" ? " neg" : (dir === "in" ? " pos" : "")),
+            type: "number", step: "0.01", value: t.amount,
+            onchange: function (e) { t.amount = num(e.target.value); save(); fullRender(); } })),
+          el("td", { class: "tx-check" }, el("span", { class: "transfer-sign", title: dir === "out" ? "Sortant" : (dir === "in" ? "Entrant" : "Virement") }, dir === "out" ? "−" : (dir === "in" ? "+" : "⇄"))),
+          el("td", {}, el("div", { class: "row-actions" },
+            el("button", { class: "icon-btn", title: "Supprimer le virement", onclick: function () { removeTransfer(t); save(); fullRender(); } }, "✕")
+          ))
+        );
+      }
+
+      var trs = items.map(function (item) { return item.kind === "tx" ? buildTxRow(item.tx) : buildTransferRow(item.t); });
 
       // ----- per-column filter row -----
       var subNames = {};
@@ -1229,13 +1316,13 @@
         var fm = (tableFilters.amount || "").replace(".", ",").toLowerCase();
         var shown = 0;
         trs.forEach(function (tr) {
-          var d = tr.dataset, ok = true;
-          if (fd && d.fdate.toLowerCase().indexOf(fd) < 0) ok = false;
-          if (ok && fc !== "all" && d.fcat !== fc) ok = false;
-          if (ok && fs !== "all" && d.fsub !== fs) ok = false;
-          if (ok && fa !== "all" && d.facct !== fa) ok = false;
-          if (ok && fx && d.fdesc.indexOf(fx) < 0) ok = false;
-          if (ok && fm && d.famt.indexOf(fm) < 0) ok = false;
+          var d = tr.dataset, ok = true, isT = d.transfer === "1";
+          if (fd && (d.fdate || "").toLowerCase().indexOf(fd) < 0) ok = false;
+          if (ok && fc !== "all") { ok = isT ? false : (d.fcat === fc); }
+          if (ok && fs !== "all") { ok = isT ? false : (d.fsub === fs); }
+          if (ok && fa !== "all") { ok = isT ? (d.facctfrom === fa || d.facctto === fa) : (d.facct === fa); }
+          if (ok && fx && (d.fdesc || "").indexOf(fx) < 0) ok = false;
+          if (ok && fm && (d.famt || "").indexOf(fm) < 0) ok = false;
           tr.style.display = ok ? "" : "none";
           if (ok) shown++;
         });
@@ -1528,6 +1615,15 @@
       state.months[mk].transactions.forEach(function (tx) { if (tx.accountId === accId) tx.accountId = target.id; });
     });
     (state.recurring || []).forEach(function (r) { if (r.accountId === accId) r.accountId = target.id; });
+    Object.keys(state.months).forEach(function (mk) {
+      var md = state.months[mk];
+      if (!md.transfers) return;
+      md.transfers.forEach(function (t) {
+        if (t.fromId === accId) t.fromId = target.id;
+        if (t.toId === accId) t.toId = target.id;
+      });
+      md.transfers = md.transfers.filter(function (t) { return t.fromId !== t.toId; });
+    });
     state.accounts = state.accounts.filter(function (a) { return a.id !== accId; });
     if (state.accountFilter === accId) state.accountFilter = "all";
     save(); fullRender();
@@ -1549,6 +1645,58 @@
       el("button", { class: "add-link", style: { marginTop: "8px" }, onclick: function () {
         state.accounts.push({ id: uid(), name: "Nouveau compte" }); save(); fullRender();
       } }, "+ Ajouter un compte")
+    );
+  }
+
+  function renderTransfersModal() {
+    if (!state.accounts || state.accounts.length < 2) {
+      return el("div", {}, el("div", { class: "modal-intro" }, "Ajoute au moins deux comptes (bouton « Comptes ») pour pouvoir faire des virements."));
+    }
+    var dateInput = el("input", { type: "date", value: new Date().toISOString().slice(0, 10) });
+    var fromSel = el("select", {}); state.accounts.forEach(function (a) { fromSel.appendChild(el("option", { value: a.id }, a.name)); });
+    var toSel = el("select", {}); state.accounts.forEach(function (a) { toSel.appendChild(el("option", { value: a.id }, a.name)); });
+    if (state.accounts[1]) toSel.value = state.accounts[1].id;
+    var amt = el("input", { type: "number", step: "0.01", placeholder: "Montant" });
+    var desc = el("input", { type: "text", placeholder: "Description (optionnel)" });
+
+    var form = el("form", { class: "rec-form", onsubmit: function (e) {
+      e.preventDefault();
+      if (amt.value === "" || !fromSel.value || !toSel.value) return;
+      if (fromSel.value === toSel.value) { window.alert("Choisis deux comptes différents."); return; }
+      addTransfer({ id: uid(), date: dateInput.value, fromId: fromSel.value, toId: toSel.value, amount: num(amt.value), description: desc.value });
+      save(); fullRender();
+    } },
+      dateInput, el("span", { class: "full rec-arrow" }, "De ⟶ Vers"), fromSel, toSel, amt, desc,
+      el("button", { class: "btn-primary full", type: "submit" }, "+ Ajouter un virement")
+    );
+
+    var all = [];
+    Object.keys(state.months).forEach(function (mk) { (state.months[mk].transfers || []).forEach(function (t) { all.push(t); }); });
+    all.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+    var list;
+    if (!all.length) {
+      list = el("div", { class: "empty-note" }, "Aucun virement pour l'instant.");
+    } else {
+      list = el("div", {}, all.map(function (t) {
+        var fromA = accountById(t.fromId), toA = accountById(t.toId);
+        return el("div", { class: "rec-row" },
+          el("div", { class: "rr-top" },
+            el("span", { style: { flex: "1", fontWeight: "700" } }, (fromA ? fromA.name : "?") + " ⟶ " + (toA ? toA.name : "?")),
+            el("button", { class: "icon-btn", title: "Supprimer", onclick: function () { removeTransfer(t); save(); fullRender(); } }, "✕")
+          ),
+          el("div", { class: "fund-meta" },
+            el("span", {}, t.date),
+            el("span", {}, formatMoney(t.amount, state.currency)),
+            t.description ? el("span", {}, t.description) : null
+          )
+        );
+      }));
+    }
+
+    return el("div", {},
+      el("div", { class: "modal-intro" }, "Un virement déplace de l'argent d'un compte à un autre — ni revenu ni dépense. Il ajuste le « Left to Spend » de chaque compte et s'annule sur « Tous les comptes »."),
+      form,
+      list
     );
   }
 
