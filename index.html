@@ -217,6 +217,8 @@
   tr.filter-row input, tr.filter-row select {
     width: 100%; font-size: 12px; padding: 4px 6px; border-radius: 6px;
   }
+  .all-months-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-dim); cursor: pointer; }
+  .all-months-toggle input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
   .filter-clear { background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; border-radius: 6px; }
   .filter-clear:hover { color: var(--accent); background: var(--bg-elev-2); }
   td.tx-check input { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
@@ -468,6 +470,7 @@
   var tableFilters = { date: "", catId: "all", subName: "all", accountId: "all", desc: "", amount: "" };
   function resetTableFilters() { tableFilters = { date: "", catId: "all", subName: "all", accountId: "all", desc: "", amount: "" }; }
   var tableSort = { key: "date", dir: "desc" };
+  var searchAllMonths = false;
   function setSort(key) {
     if (tableSort.key === key) tableSort.dir = (tableSort.dir === "asc") ? "desc" : "asc";
     else tableSort = { key: key, dir: (key === "amount" || key === "date") ? "desc" : "asc" };
@@ -1144,9 +1147,18 @@
     );
 
     var acctF = state.accountFilter || "all";
-    var txItems = md.transactions.filter(function (tx) { return txMatchesAccount(tx, acctF); }).map(function (tx) { return { kind: "tx", tx: tx, date: tx.date || "" }; });
-    var trItems = (md.transfers || []).filter(function (t) { return acctF === "all" || t.fromId === acctF || t.toId === acctF; }).map(function (t) { return { kind: "transfer", t: t, date: t.date || "" }; });
-    var items = txItems.concat(trItems);
+    var monthsToScan = searchAllMonths ? Object.keys(state.months) : [state.currentMonth];
+    var items = [];
+    monthsToScan.forEach(function (mk) {
+      var mmd = state.months[mk];
+      if (!mmd) return;
+      mmd.transactions.forEach(function (tx) {
+        if (txMatchesAccount(tx, acctF)) items.push({ kind: "tx", tx: tx, md: mmd, date: tx.date || "" });
+      });
+      (mmd.transfers || []).forEach(function (t) {
+        if (acctF === "all" || t.fromId === acctF || t.toId === acctF) items.push({ kind: "transfer", t: t, md: mmd, date: t.date || "" });
+      });
+    });
     function itemSortVal(item, key) {
       if (item.kind === "transfer") {
         var t = item.t;
@@ -1169,9 +1181,9 @@
 
     var tableArea;
     if (items.length === 0) {
-      tableArea = el("div", { class: "empty-note" }, "No transactions this month yet.");
+      tableArea = el("div", { class: "empty-note" }, searchAllMonths ? "No transactions yet." : "No transactions this month yet.");
     } else {
-      function buildTxRow(tx) {
+      function buildTxRow(tx, ownerMd) {
         var rowCat = el("select", { class: "row-edit", onchange: function (e) {
           tx.catId = e.target.value; tx.subId = null; save(); fullRender();
         } });
@@ -1201,8 +1213,8 @@
               };
               state.recurring.push(rec);
               tx.recurringId = rec.id;
-              if (!md.recurringApplied) md.recurringApplied = {};
-              md.recurringApplied[rec.id] = true;
+              if (!ownerMd.recurringApplied) ownerMd.recurringApplied = {};
+              ownerMd.recurringApplied[rec.id] = true;
               save(); fullRender();
             } else {
               if (!window.confirm("Arrêter cette récurrence ? La transaction actuelle est conservée.")) { e.target.checked = true; return; }
@@ -1243,10 +1255,10 @@
           el("td", {}, el("div", { class: "row-actions" },
             el("button", { class: "icon-btn", title: "Duplicate", onclick: function () {
               var copy = { id: uid(), date: tx.date, catId: tx.catId, subId: tx.subId || null, accountId: tx.accountId || defaultAccountId(), amount: tx.amount, description: tx.description };
-              md.transactions.push(copy); save(); fullRender();
+              ownerMd.transactions.push(copy); save(); fullRender();
             } }, "⧉"),
             el("button", { class: "icon-btn", title: "Delete", onclick: function () {
-              md.transactions = md.transactions.filter(function (t) { return t.id !== tx.id; });
+              ownerMd.transactions = ownerMd.transactions.filter(function (t) { return t.id !== tx.id; });
               save(); fullRender();
             } }, "✕")
           ))
@@ -1283,7 +1295,7 @@
         );
       }
 
-      var trs = items.map(function (item) { return item.kind === "tx" ? buildTxRow(item.tx) : buildTransferRow(item.t); });
+      var trs = items.map(function (item) { return item.kind === "tx" ? buildTxRow(item.tx, item.md) : buildTransferRow(item.t); });
 
       // ----- per-column filter row -----
       var subNames = {};
@@ -1350,7 +1362,14 @@
     }
 
     return el("section", { class: "block" },
-      el("h2", {}, "🍡 Transactions"),
+      el("h2", {},
+        el("span", {}, "🍡 Transactions"),
+        el("label", { class: "all-months-toggle" },
+          el("input", { type: "checkbox", checked: searchAllMonths ? true : null,
+            onchange: function (e) { searchAllMonths = e.target.checked; fullRender(); } }),
+          "Rechercher tous les mois"
+        )
+      ),
       form,
       el("div", { class: "table-wrap" }, tableArea)
     );
